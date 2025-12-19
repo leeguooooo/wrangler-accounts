@@ -30,6 +30,7 @@ Options:
   -c, --config <path>     Wrangler config path
   -p, --profiles <path>   Profiles directory
   --json                  JSON output for list/status
+  --plain                 Plain output for list (one name per line)
   -f, --force             Overwrite existing profile on save
   --backup                Backup current config on use (default)
   --no-backup             Disable backup on use
@@ -73,6 +74,8 @@ function parseArgs(argv) {
       opts.help = true;
     } else if (arg === "--json") {
       opts.json = true;
+    } else if (arg === "--plain") {
+      opts.plain = true;
     } else if (arg === "--force" || arg === "-f") {
       opts.force = true;
     } else if (arg === "--backup") {
@@ -300,6 +303,8 @@ function main() {
     const profiles = listProfiles(profilesDir);
     if (opts.json) {
       console.log(JSON.stringify(profiles, null, 2));
+    } else if (opts.plain) {
+      if (profiles.length) console.log(profiles.join("\n"));
     } else if (profiles.length === 0) {
       console.log("No profiles found.");
     } else {

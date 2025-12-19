@@ -46,6 +46,7 @@ wrangler-accounts remove old
 -c, --config <path>     Wrangler config path
 -p, --profiles <path>   Profiles directory
 --json                  JSON output for list/status
+--plain                 Plain output for list (one name per line)
 -f, --force             Overwrite existing profile on save
 --backup                Backup current config on use (default)
 --no-backup             Disable backup on use
@@ -76,3 +77,17 @@ The profiles directory defaults to:
 - Profile names accept only letters, numbers, dot, underscore, and dash.
 - On `use`, the current config is backed up into `__backup-YYYYMMDD-HHMMSS` unless you pass `--no-backup`.
 - `login <name>` overwrites an existing profile with the same name.
+
+## Shell completion (zsh)
+
+```bash
+mkdir -p ~/.zsh/completions
+cp $(pnpm root -g)/@leeguoo/wrangler-accounts/completions/wrangler-accounts.zsh ~/.zsh/completions/_wrangler-accounts
+```
+
+Then add to your `~/.zshrc`:
+
+```bash
+fpath=(~/.zsh/completions $fpath)
+autoload -Uz compinit && compinit
+```
