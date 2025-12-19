@@ -350,8 +350,11 @@ function main() {
     if (!fs.existsSync(configPath)) {
       die(`Config file not found after login: ${configPath}`);
     }
-    saveProfile(name, configPath, profilesDir, opts.force);
-    console.log(`Logged in and saved profile '${name}' from ${configPath}`);
+    const profileDir = path.join(profilesDir, name);
+    const existed = fs.existsSync(profileDir);
+    saveProfile(name, configPath, profilesDir, true);
+    const note = existed ? " (overwritten)" : "";
+    console.log(`Logged in and saved profile '${name}' from ${configPath}${note}`);
     return;
   }
 

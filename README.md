@@ -75,3 +75,4 @@ The profiles directory defaults to:
 
 - Profile names accept only letters, numbers, dot, underscore, and dash.
 - On `use`, the current config is backed up into `__backup-YYYYMMDD-HHMMSS` unless you pass `--no-backup`.
+- `login <name>` overwrites an existing profile with the same name.
