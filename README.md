@@ -45,7 +45,7 @@ wrangler-accounts remove old
 ```text
 -c, --config <path>     Wrangler config path
 -p, --profiles <path>   Profiles directory
---json                  JSON output for list/status
+--json                  JSON output for all commands
 --plain                 Plain output for list (one name per line)
 -f, --force             Overwrite existing profile on save
 --backup                Backup current config on use (default)
@@ -57,6 +57,18 @@ wrangler-accounts remove old
 - WRANGLER_CONFIG_PATH
 - WRANGLER_ACCOUNTS_DIR
 - XDG_CONFIG_HOME
+
+## JSON output
+
+Use `--json` for machine-readable output.
+
+Examples:
+
+```bash
+wrangler-accounts list --json
+wrangler-accounts status --json
+wrangler-accounts use personal --json
+```
 
 ## Defaults
 

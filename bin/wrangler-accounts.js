@@ -7,9 +7,15 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 
-function die(message) {
-  console.error(`Error: ${message}`);
-  process.exit(1);
+let outputJson = false;
+
+function die(message, exitCode = 1) {
+  if (outputJson) {
+    console.error(JSON.stringify({ error: message }, null, 2));
+  } else {
+    console.error(`Error: ${message}`);
+  }
+  process.exit(exitCode);
 }
 
 function printHelp(exitCode = 0) {
@@ -29,7 +35,7 @@ Commands:
 Options:
   -c, --config <path>     Wrangler config path
   -p, --profiles <path>   Profiles directory
-  --json                  JSON output for list/status
+  --json                  JSON output for all commands
   --plain                 Plain output for list (one name per line)
   -f, --force             Overwrite existing profile on save
   --backup                Backup current config on use (default)
@@ -290,7 +296,9 @@ function removeProfile(name, profilesDir) {
 }
 
 function main() {
-  const { opts, rest } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  outputJson = argv.includes("--json");
+  const { opts, rest } = parseArgs(argv);
   if (opts.help) printHelp(0);
 
   const command = rest[0];
@@ -342,8 +350,26 @@ function main() {
     const name = rest[1];
     if (!name) die("Missing profile name for save");
     ensureDir(profilesDir);
+    const profileDir = path.join(profilesDir, name);
+    const existed = fs.existsSync(profileDir);
     saveProfile(name, configPath, profilesDir, opts.force);
-    console.log(`Saved profile '${name}' from ${configPath}`);
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            command: "save",
+            name,
+            configPath,
+            profilesDir,
+            overwritten: existed,
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      console.log(`Saved profile '${name}' from ${configPath}`);
+    }
     return;
   }
 
@@ -359,7 +385,23 @@ function main() {
     const existed = fs.existsSync(profileDir);
     saveProfile(name, configPath, profilesDir, true);
     const note = existed ? " (overwritten)" : "";
-    console.log(`Logged in and saved profile '${name}' from ${configPath}${note}`);
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            command: "login",
+            name,
+            configPath,
+            profilesDir,
+            overwritten: existed,
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      console.log(`Logged in and saved profile '${name}' from ${configPath}${note}`);
+    }
     return;
   }
 
@@ -369,7 +411,23 @@ function main() {
     ensureDir(profilesDir);
     const backupName = useProfile(name, configPath, profilesDir, opts.backup);
     const backupNote = backupName ? ` (backup: ${backupName})` : "";
-    console.log(`Switched to profile '${name}'${backupNote}`);
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            command: "use",
+            name,
+            configPath,
+            profilesDir,
+            backupName,
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      console.log(`Switched to profile '${name}'${backupNote}`);
+    }
     return;
   }
 
@@ -377,7 +435,21 @@ function main() {
     const name = rest[1];
     if (!name) die("Missing profile name for remove");
     removeProfile(name, profilesDir);
-    console.log(`Removed profile '${name}'`);
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            command: "remove",
+            name,
+            profilesDir,
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      console.log(`Removed profile '${name}'`);
+    }
     return;
   }
 
