@@ -13,15 +13,17 @@ function mkStore() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'wa-listenriched-'));
 }
 
-function addProfile(dir, name, { expired = false, identity = null } = {}) {
+function addProfile(dir, name, { expired = false, withRefresh = false, identity = null } = {}) {
   fs.mkdirSync(path.join(dir, name), { recursive: true });
   const exp = expired
     ? '2000-01-01T00:00:00.000Z'
     : '2099-01-01T00:00:00.000Z';
-  fs.writeFileSync(
-    path.join(dir, name, 'config.toml'),
-    `oauth_token = "x"\nexpiration_time = "${exp}"\n`,
-  );
+  const lines = [
+    'oauth_token = "x"',
+    `expiration_time = "${exp}"`,
+  ];
+  if (withRefresh) lines.push('refresh_token = "r"');
+  fs.writeFileSync(path.join(dir, name, 'config.toml'), lines.join('\n') + '\n');
   const meta = {
     name,
     savedAt: new Date().toISOString(),
@@ -114,6 +116,42 @@ test('list --json on empty dir still returns []', () => {
   const r = run(['list', '--json'], dir);
   assert.equal(r.status, 0);
   assert.deepEqual(JSON.parse(r.stdout), []);
+});
+
+test('list distinguishes refreshable vs truly-expired profiles', () => {
+  const dir = mkStore();
+  addProfile(dir, 'refreshable', { expired: true, withRefresh: true });
+  addProfile(dir, 'trulydead', { expired: true, withRefresh: false });
+  addProfile(dir, 'fresh', { expired: false, withRefresh: true });
+
+  const r = run(['list', '--json'], dir);
+  assert.equal(r.status, 0, `stderr=${r.stderr}`);
+  const byName = Object.fromEntries(JSON.parse(r.stdout).map((e) => [e.name, e]));
+
+  assert.equal(byName.fresh.status, 'valid');
+  assert.equal(byName.fresh.hasRefreshToken, true);
+
+  assert.equal(byName.refreshable.status, 'refreshable');
+  assert.equal(byName.refreshable.hasRefreshToken, true);
+
+  assert.equal(byName.trulydead.status, 'expired');
+  assert.equal(byName.trulydead.hasRefreshToken, false);
+});
+
+test('list text output shows "valid*" for refreshable and "EXPIRED" for truly-expired', () => {
+  const dir = mkStore();
+  addProfile(dir, 'refreshable', { expired: true, withRefresh: true });
+  addProfile(dir, 'trulydead', { expired: true, withRefresh: false });
+  const r = run(['list'], dir);
+  assert.equal(r.status, 0, `stderr=${r.stderr}`);
+  // refreshable row must show 'valid*' (the asterisk distinguishes it from real valid)
+  const refreshableRow = r.stdout.split('\n').find((l) => /\brefreshable\b/.test(l) && !/Legend/.test(l));
+  assert.ok(refreshableRow, 'refreshable row missing');
+  assert.match(refreshableRow, /valid\*/);
+  // trulydead row must show 'EXPIRED'
+  const trulydeadRow = r.stdout.split('\n').find((l) => /\btrulydead\b/.test(l) && !/Legend/.test(l));
+  assert.ok(trulydeadRow, 'trulydead row missing');
+  assert.match(trulydeadRow, /EXPIRED/);
 });
 
 test('list text on empty dir still says "No profiles found."', () => {

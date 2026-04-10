@@ -77,13 +77,26 @@ Use `--json` for structured output.
 ### List and inspect profiles
 
 - `wrangler-accounts list` — text table with NAME / STATUS / EXPIRES / IDENTITY columns
-- `wrangler-accounts list --json` — structured: array of `{name, isDefault, isActive, status, expirationTime, identity}`
+- `wrangler-accounts list --json` — structured: array of `{name, isDefault, isActive, status, expirationTime, hasRefreshToken, identity, verified, verifyError}`
 - `wrangler-accounts list --plain` — one profile name per line (scriptable)
 - `wrangler-accounts list --deep` — **authoritative** check: spawns `wrangler whoami` in a shadow HOME for every profile and reports whether Cloudflare actually accepts the credentials. Slower (makes network calls), but the only way to catch revoked refresh tokens or broken profile files.
 - `wrangler-accounts status` / `status --json`
 - Pass `--include-backups` to show hidden backup profiles.
 
-**Accuracy note:** the `STATUS` column without `--deep` is derived purely from the saved `expiration_time` and tells you *when the access token will expire*, not whether the profile is actually usable. Wrangler auto-refreshes access tokens via the refresh token, so an `EXPIRED` access token is often fine in practice. When the user needs a real verdict, suggest `wrangler-accounts list --deep`.
+**STATUS values (1.3.0+):**
+
+| value | meaning | user action |
+|---|---|---|
+| `valid` | access_token is currently valid | none |
+| `valid*` / `refreshable` | access_token past expiry **BUT** refresh_token present; wrangler will auto-refresh on next use | **none** — this is fine, don't scare the user |
+| `EXPIRED` / `expired` | access_token expired **AND** no refresh_token saved; profile is genuinely broken | `wrangler-accounts login <name>` |
+| `unknown` | profile file has no `expiration_time` field | run `list --deep` to verify live |
+
+**Cloudflare OAuth lifecycle reference:** access tokens are short-lived (~1 hour) by design. Every profile with `offline_access` in its scopes also has a long-lived refresh_token (~30 days, silently extended on use). Wrangler refreshes access tokens automatically whenever it runs a command and the current one is past expiry. **Do not tell the user to re-login just because `list` shows an expired access token** — check `hasRefreshToken` first. If the profile's STATUS is `valid*` / `refreshable`, nothing is wrong.
+
+The only time a user actually needs `wrangler-accounts login <name>` again is:
+1. STATUS is `EXPIRED` (no refresh_token at all — profile was saved without `offline_access` scope)
+2. OR `list --deep` returns `✗` with "Not logged in" / "refresh token may be revoked" (refresh token itself got invalidated)
 
 ### Save, sync, login, remove
 

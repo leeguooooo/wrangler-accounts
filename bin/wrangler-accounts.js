@@ -442,16 +442,13 @@ function main() {
       const session = readSessionState(cfgPath);
       const meta = readMeta(profileDir);
       const identity = getMetaIdentity(meta);
-      let status;
-      if (session.expired === true) status = "expired";
-      else if (session.expired === false) status = "valid";
-      else status = "unknown";
       return {
         name,
         isDefault: name === defaultName,
         isActive: name === activeName,
-        status,
+        status: session.effective, // 'valid' | 'refreshable' | 'expired' | 'unknown'
         expirationTime: session.expirationTime,
+        hasRefreshToken: session.hasRefreshToken,
         identity,
         verified: null,
         verifyError: null,
@@ -528,6 +525,7 @@ function main() {
       name: e.name,
       status:
         e.status === "expired" ? "EXPIRED"
+        : e.status === "refreshable" ? "valid*"
         : e.status === "valid" ? "valid"
         : "unknown",
       expires: formatExpiry(e.expirationTime),
@@ -563,17 +561,23 @@ function main() {
     console.log();
     if (opts.deep) {
       console.log(
-        "Legend: * = default profile, VERIFIED ✓ = wrangler whoami succeeded in shadow HOME, ✗ = authoritative failure",
+        "Legend: * = default profile | STATUS valid = access token fresh | valid* = access token expired but refresh_token will auto-refresh",
+      );
+      console.log(
+        "        EXPIRED = access token expired and no refresh_token, must 'login <name>' again",
+      );
+      console.log(
+        "        VERIFIED ✓ = 'wrangler whoami' succeeded in shadow HOME (authoritative) | ✗ = failed",
       );
     } else {
       console.log(
-        "Legend: * = default profile, EXPIRED = access token past expiration_time (wrangler may still auto-refresh)",
+        "Legend: * = default profile | STATUS valid = access token fresh | valid* = access token expired but refresh_token will auto-refresh",
       );
       console.log(
-        "        STATUS is derived from the saved file only. For a live check that runs 'wrangler whoami' against Cloudflare,",
+        "        EXPIRED = access token expired and no refresh_token, must 'login <name>' again | unknown = no expiration_time saved",
       );
       console.log(
-        "        pass --deep (slower, makes network calls).",
+        "        STATUS is file-only. For a live check against Cloudflare, pass --deep (slower, makes network calls).",
       );
     }
     return;

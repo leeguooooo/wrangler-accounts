@@ -153,6 +153,7 @@ test('readSessionState returns expired=false for future expiration', () => {
   const s = store.readSessionState(p);
   assert.equal(s.expirationTime, '2099-01-01T00:00:00.000Z');
   assert.equal(s.expired, false);
+  assert.equal(s.effective, 'valid');
 });
 
 test('readSessionState returns expired=true for past expiration', () => {
@@ -163,11 +164,64 @@ test('readSessionState returns expired=true for past expiration', () => {
   assert.equal(s.expired, true);
 });
 
-test('readSessionState returns nulls for config without expiration', () => {
+test('readSessionState returns nulls + effective=unknown for config without expiration', () => {
   const dir = mkTmp('session-none');
   const p = path.join(dir, 'default.toml');
   fs.writeFileSync(p, 'oauth_token = "x"\n');
-  assert.deepEqual(store.readSessionState(p), { expirationTime: null, expired: null });
+  const s = store.readSessionState(p);
+  assert.equal(s.expirationTime, null);
+  assert.equal(s.expired, null);
+  assert.equal(s.hasRefreshToken, false);
+  assert.equal(s.effective, 'unknown');
+});
+
+test('readSessionState detects hasRefreshToken presence', () => {
+  const dir = mkTmp('session-with-refresh');
+  const p = path.join(dir, 'default.toml');
+  fs.writeFileSync(
+    p,
+    [
+      'oauth_token = "x"',
+      'expiration_time = "2099-01-01T00:00:00.000Z"',
+      'refresh_token = "r"',
+    ].join('\n'),
+  );
+  const s = store.readSessionState(p);
+  assert.equal(s.hasRefreshToken, true);
+  assert.equal(s.effective, 'valid');
+});
+
+test('readSessionState effective=refreshable when access expired but refresh_token present', () => {
+  const dir = mkTmp('session-refreshable');
+  const p = path.join(dir, 'default.toml');
+  fs.writeFileSync(
+    p,
+    [
+      'oauth_token = "expired"',
+      'expiration_time = "2000-01-01T00:00:00.000Z"',
+      'refresh_token = "still-valid"',
+    ].join('\n'),
+  );
+  const s = store.readSessionState(p);
+  assert.equal(s.expired, true);
+  assert.equal(s.hasRefreshToken, true);
+  assert.equal(s.effective, 'refreshable');
+});
+
+test('readSessionState effective=expired when access expired and no refresh_token', () => {
+  const dir = mkTmp('session-truly-expired');
+  const p = path.join(dir, 'default.toml');
+  fs.writeFileSync(
+    p,
+    [
+      'oauth_token = "expired"',
+      'expiration_time = "2000-01-01T00:00:00.000Z"',
+    ].join('\n'),
+  );
+  const s = store.readSessionState(p);
+  assert.equal(s.expired, true);
+  assert.equal(s.hasRefreshToken, false);
+  assert.equal(s.effective, 'expired');
 });
 
 test('findMatchingProfile finds by hash', () => {
