@@ -9,6 +9,8 @@ const path = require('node:path');
 const {
   createShadowHome,
   cleanupShadow,
+  buildIsolatedEnv,
+  runIsolated,
 } = require('../lib/isolation');
 
 function mkFakeRealHome() {
@@ -156,4 +158,128 @@ test('createShadowHome throws when profileCfg does not exist', () => {
     () => createShadowHome({ realHome, profileCfg: '/nonexistent/cfg.toml' }),
     /profile config does not exist/,
   );
+});
+
+test('buildIsolatedEnv sets HOME, WRANGLER_PROFILE, and pass-through paths', () => {
+  const env = buildIsolatedEnv({
+    shadow: '/tmp/fake-shadow',
+    realHome: '/Users/fake',
+    profile: 'work',
+    baseEnv: { PATH: '/usr/bin', FOO: 'bar' },
+  });
+  assert.equal(env.HOME, '/tmp/fake-shadow');
+  assert.equal(env.WRANGLER_PROFILE, 'work');
+  assert.equal(env.WRANGLER_ACCOUNT, 'work');
+  assert.equal(env.WRANGLER_ACCOUNT_REAL_HOME, '/Users/fake');
+  assert.equal(env.WRANGLER_REGISTRY_PATH, '/Users/fake/.wrangler/registry');
+  assert.equal(env.WRANGLER_CACHE_DIR, '/Users/fake/.wrangler/cache');
+  assert.equal(env.WRANGLER_LOG_PATH, '/Users/fake/.wrangler/logs');
+  assert.equal(env.WRANGLER_SEND_METRICS, 'false');
+  // base env preserved
+  assert.equal(env.PATH, '/usr/bin');
+  assert.equal(env.FOO, 'bar');
+});
+
+test('buildIsolatedEnv includes CLOUDFLARED_PATH only when provided', () => {
+  const envWith = buildIsolatedEnv({
+    shadow: '/a',
+    realHome: '/b',
+    profile: 'w',
+    baseEnv: {},
+    cloudflaredPath: '/usr/local/bin/cloudflared',
+  });
+  assert.equal(envWith.CLOUDFLARED_PATH, '/usr/local/bin/cloudflared');
+
+  const envWithout = buildIsolatedEnv({
+    shadow: '/a',
+    realHome: '/b',
+    profile: 'w',
+    baseEnv: {},
+  });
+  assert.equal('CLOUDFLARED_PATH' in envWithout, false);
+});
+
+test('runIsolated spawns child with shadow HOME and correct env', () => {
+  const realHome = mkFakeRealHome();
+  const { profileCfg } = mkProfile();
+  const outFile = path.join(os.tmpdir(), `wa-out-${Date.now()}-${Math.random()}.json`);
+  const fakeWrangler = path.join(__dirname, 'fixtures', 'fake-wrangler.sh');
+
+  const result = runIsolated({
+    profile: 'work',
+    profileCfg,
+    realHome,
+    command: fakeWrangler,
+    args: ['deploy', '--env', 'production'],
+    baseEnv: { ...process.env, WA_TEST_OUT: outFile, PATH: process.env.PATH },
+  });
+
+  assert.equal(result.exitCode, 0);
+  const payload = JSON.parse(fs.readFileSync(outFile, 'utf8'));
+  // child's HOME is a shadow, not the real one
+  assert.ok(payload.home.startsWith(os.tmpdir()));
+  assert.notEqual(payload.home, realHome);
+  assert.deepEqual(payload.argv, ['deploy', '--env', 'production']);
+  assert.equal(payload.env.WRANGLER_PROFILE, 'work');
+  assert.equal(payload.env.WRANGLER_ACCOUNT, 'work');
+  assert.equal(payload.env.WRANGLER_REGISTRY_PATH, path.join(realHome, '.wrangler/registry'));
+  assert.equal(payload.env.WRANGLER_CACHE_DIR, path.join(realHome, '.wrangler/cache'));
+  assert.equal(payload.env.WRANGLER_SEND_METRICS, 'false');
+  // shadow HOME should be cleaned up after runIsolated returns
+  assert.equal(fs.existsSync(payload.home), false);
+
+  fs.unlinkSync(outFile);
+});
+
+test('runIsolated forwards child exit code', () => {
+  const realHome = mkFakeRealHome();
+  const { profileCfg } = mkProfile();
+  const result = runIsolated({
+    profile: 'work',
+    profileCfg,
+    realHome,
+    command: 'sh',
+    args: ['-c', 'exit 42'],
+    baseEnv: { ...process.env },
+  });
+  assert.equal(result.exitCode, 42);
+});
+
+test('runIsolated cleans up shadow on non-zero child exit', () => {
+  const realHome = mkFakeRealHome();
+  const { profileCfg } = mkProfile();
+  const outFile = path.join(os.tmpdir(), `wa-out-nonzero-${Date.now()}.txt`);
+  runIsolated({
+    profile: 'work',
+    profileCfg,
+    realHome,
+    command: 'sh',
+    args: ['-c', `echo $HOME > ${outFile}; exit 7`],
+    baseEnv: { ...process.env },
+  });
+  const shadowPath = fs.readFileSync(outFile, 'utf8').trim();
+  assert.equal(fs.existsSync(shadowPath), false, 'shadow should be cleaned up even on non-zero exit');
+  fs.unlinkSync(outFile);
+});
+
+test('two runIsolated calls with the same profile get different shadow HOMEs', () => {
+  const realHome = mkFakeRealHome();
+  const { profileCfg } = mkProfile();
+  const out1 = path.join(os.tmpdir(), `wa-r1-${Date.now()}.txt`);
+  const out2 = path.join(os.tmpdir(), `wa-r2-${Date.now()}.txt`);
+  runIsolated({
+    profile: 'work', profileCfg, realHome,
+    command: 'sh', args: ['-c', `echo $HOME > ${out1}`],
+    baseEnv: { ...process.env },
+  });
+  runIsolated({
+    profile: 'work', profileCfg, realHome,
+    command: 'sh', args: ['-c', `echo $HOME > ${out2}`],
+    baseEnv: { ...process.env },
+  });
+  const home1 = fs.readFileSync(out1, 'utf8').trim();
+  const home2 = fs.readFileSync(out2, 'utf8').trim();
+  assert.notEqual(home1, home2, 'each invocation should get its own shadow');
+  fs.unlinkSync(out1);
+  fs.unlinkSync(out2);
 });
