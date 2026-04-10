@@ -271,7 +271,10 @@ Notes:
   Deferred to v1.1 if demand exists.
 - If real HOME already contains `.wrangler` (legacy install), it is **not**
   mirrored. Shadow HOME's own `.wrangler` directory is what Wrangler will find
-  and use.
+  and use. This also applies when real `~/.wrangler` is itself a symlink to
+  some other location: we still do not mirror it; the shadow's own `.wrangler`
+  is a fresh real directory and takes precedence via
+  `getGlobalWranglerConfigPath()`'s `legacyConfigDir` branch.
 
 ### Env injection
 
@@ -288,6 +291,14 @@ In addition to `HOME`, set the following on the child process:
 | `WRANGLER_LOG_PATH` | `<realHome>/.wrangler/logs` | Keep debug logs persistent |
 | `CLOUDFLARED_PATH` | `$(which cloudflared)` if available | Avoid re-downloading cloudflared |
 | `WRANGLER_SEND_METRICS` | `false` (only in `runIsolated`) | Metrics file would be ephemeral anyway |
+
+All five `WRANGLER_*` and `CLOUDFLARED_*` env var names above were verified in
+wrangler 4.79.0's bundled `cli.js`
+(`/opt/homebrew/lib/node_modules/wrangler/wrangler-dist/cli.js` lines 10787,
+10836, 10839, 48123 — factories declared via `getEnvironmentVariableFactory`).
+The implementation plan should re-verify against the target wrangler version
+before shipping, since the design has already been bitten once by
+non-functional hypothetical env vars (`WRANGLER_HOME`).
 
 Rationale: the shadow only isolates the OAuth credential; all other
 "global-ish" wrangler state (dev registry, cache, logs) is deliberately routed
@@ -330,6 +341,21 @@ function runIsolated(profile, { mode, argv, userCmd }) {
 Cleanup is safe because the shadow contains only directory entries that are
 either symlinks (to real files) or a symlinked `.wrangler/config/default.toml`
 (to the profile file). A crash leaks an empty directory, not secrets.
+
+**Signal forwarding:** `spawnSync` with `stdio: "inherit"` blocks the
+`wrangler-accounts` parent process for the entire duration of the child
+(including long-running `exec` sub-shells and `wrangler dev` sessions). Node
+forwards terminal signals (SIGINT from Ctrl-C, SIGTERM, SIGHUP) to the child
+automatically under `inherit`. Implementation note: if we later switch to
+`spawn` (async) to do anything clever during execution, we must explicitly
+propagate signals and re-enable the try/finally cleanup, because an
+unpropagated SIGINT would skip the `rmSync`.
+
+**`exec` arg validation:** `wrangler-accounts exec` without a profile name
+must be a hard error with the same actionable message as the generic
+resolution failure. `wrangler-accounts exec <profile>` with no command after
+`--` and no command at all defaults to `$SHELL -i` as documented; this is not
+an error.
 
 ### gc
 
