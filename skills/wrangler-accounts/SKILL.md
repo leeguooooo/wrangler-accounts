@@ -238,6 +238,33 @@ Or users can add a shell alias: `alias realhome='cd "$WRANGLER_ACCOUNT_REAL_HOME
 - "I want this account to stick for a while" → `wrangler-accounts default <name>`
 - "Just this one command" → `wrangler-accounts --profile <name> <wrangler-args>`
 
+### `[ERROR] A request to the Cloudflare API ... Authentication error [code: 10000]` with `code: 7403` ("not authorized to access this service")
+
+The OAuth token is fine but **the URL contains the wrong account ID**. wrangler caches the user's selected account in `wrangler-account.json`. If that cache file is shared across profiles, profile A's OAuth token gets paired with profile B's cached account ID, sending API calls to the wrong account. Symptoms:
+
+- `deploy` and `secret put` succeed (they don't put account ID in the URL path)
+- `d1 execute --remote`, `r2 object get/put`, anything else with `/accounts/<id>/...` in the URL fails with 7403
+
+**Fix path** (in order):
+
+1. **Are you on wrangler-accounts ≥ 1.2.2?** Run `wrangler-accounts --version`. If `< 1.2.2`, upgrade — earlier versions pointed `WRANGLER_CACHE_DIR` at a shared global path. 1.2.2 isolates the cache per profile.
+2. **Clear the polluted shared cache** (one-time, even after upgrading):
+   ```bash
+   rm -f ~/.wrangler/cache/wrangler-account.json
+   rm -f ~/Library/Preferences/.wrangler/cache/wrangler-account.json   # macOS env-paths fallback
+   ```
+3. **Verify with `wrangler-accounts list --deep`** — the VERIFIED column for each profile should be `✓ ok`. If `✗`, the underlying OAuth session itself is broken; run `wrangler-accounts login <name>`.
+4. **Defense in depth**: set `CLOUDFLARE_ACCOUNT_ID=<correct-id>` in the calling environment. wrangler reads this env var directly and bypasses the cache entirely. Useful for scripts or one-off recovery commands:
+   ```bash
+   CLOUDFLARE_ACCOUNT_ID=<id> wrangler-accounts <profile> r2 object put ...
+   ```
+
+**What to tell the user**: "wrangler returned 7403 because it cached the wrong account ID alongside your OAuth token. This was a real bug in wrangler-accounts ≤ 1.2.1 (shared cache directory across profiles). Upgrade to 1.2.2 and clear the polluted cache."
+
+### "The OAuth config seems right, but the wrong account is being used"
+
+Same root cause as the 7403 above. Default to the same fix path.
+
 ### Shell history / `.zsh_history` seems to grow when running `exec`
 
 Intentional. By design the shadow HOME symlinks all top-level entries of real HOME except `.wrangler`, so shell history writes pass through to the real file. This is a **convenience** bias, not a clean-room sandbox — the goal is that `exec` subshells feel like a normal terminal with a different Cloudflare account, not a jail.
