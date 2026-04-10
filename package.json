@@ -1,7 +1,7 @@
 {
   "name": "@leeguoo/wrangler-accounts",
-  "version": "0.1.5",
-  "description": "Local CLI to manage multiple Cloudflare Wrangler login profiles.",
+  "version": "1.0.0",
+  "description": "AWS-style multi-account convenience for Cloudflare Wrangler — per-invocation OAuth isolation via shadow HOME.",
   "license": "MIT",
   "bin": {
     "wrangler-accounts": "bin/wrangler-accounts.js"
