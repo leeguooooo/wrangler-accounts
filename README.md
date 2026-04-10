@@ -74,14 +74,46 @@ wrangler-accounts exec <name> -- <cmd> [args]   # one command
 wrangler-accounts login <name>                  # isolated OAuth login
 wrangler-accounts default [name | --unset]      # manage persistent default
 wrangler-accounts whoami [--profile <name>]     # show resolved identity
-wrangler-accounts list
+wrangler-accounts list                          # fast table (name/status/expires/identity)
+wrangler-accounts list --deep                   # authoritative check via wrangler whoami
+wrangler-accounts list --json                   # structured output for scripts
 wrangler-accounts status
 wrangler-accounts save <name>                   # snapshot current Wrangler config
 wrangler-accounts sync <name>                   # refresh a profile from current login
 wrangler-accounts sync-default                  # refresh the default profile
 wrangler-accounts remove <name>
 wrangler-accounts gc [--older-than 1h]          # clean stale shadow HOMEs
+-v, --version                                   # print version
 ```
+
+### `list` output
+
+Fast default (no network calls — read from saved `config.toml` only):
+
+```
+Default: work
+
+  NAME            STATUS  EXPIRES              IDENTITY
+* work            valid   in 47m (2026-04-10)  work@example.com / 0123456789abcdef0123456789abcdef
+  personal        valid   in 53m (2026-04-10)  me@example.com / fedcba9876543210fedcba9876543210
+
+Legend: * = default profile, EXPIRED = access token past expiration_time (wrangler may still auto-refresh)
+        STATUS is derived from the saved file only. For a live check that runs 'wrangler whoami' against Cloudflare,
+        pass --deep (slower, makes network calls).
+```
+
+Authoritative `--deep` check (spawns `wrangler whoami` in a shadow HOME per profile, ~1s each, network required):
+
+```
+[wrangler-accounts] running deep check (wrangler whoami) for 2 profile(s)...
+  NAME            STATUS  EXPIRES              VERIFIED                                     IDENTITY
+* work            valid   in 47m (2026-04-10)  ✓ ok                                         work@example.com / ...
+  personal        valid   in 53m (2026-04-10)  ✗ not logged in (refresh token may be revoked) me@example.com / ...
+```
+
+**When to use `--deep`**: when you actually need to know whether a profile still works. The default fast check only reads the saved `expiration_time`, which can lie in both directions — it can't tell you if Cloudflare has revoked the refresh token, and it flags fine profiles as `EXPIRED` just because their access token is past its 1-hour lifetime (wrangler auto-refreshes those transparently).
+
+The `--json` output includes the same fields as the table plus raw `expirationTime`, `isDefault`, `isActive`, and (with `--deep`) `verified`, `verifyError`, and `liveIdentity`.
 
 ## Profile resolution order
 
@@ -114,7 +146,9 @@ When you run `wrangler-accounts <wrangler-args>`, the active profile is resolved
     --backup            Backup current config on use (default)
     --no-backup         Disable backup on use
     --unset             With 'default': clear the persistent default
+    --deep, --verify    With 'list': run wrangler whoami per profile for live verification
     --older-than <dur>  With 'gc': age threshold (e.g. 1h, 30m, 7d)
+-v, -V, --version       Print version
 -h, --help              Show help
 ```
 
@@ -162,10 +196,76 @@ The profiles directory defaults to:
 - Saved OAuth sessions can expire. If a profile is expired, running it will stop and tell you to run `wrangler-accounts login <name>` again.
 - Backups from the deprecated `use` command are hidden from `list` and `status` unless you pass `--include-backups`.
 
-## Discoverability (SEO / GEO / AI search)
+## FAQ
 
-Cloudflare Wrangler multi-account switcher for global teams.
-Keywords: Cloudflare Workers account manager, Wrangler login profiles, multi-account, account switcher, AWS-style profile, per-invocation isolation, OAuth profile management.
+### How do I use Cloudflare Wrangler with multiple accounts?
+
+`wrangler` itself only supports one OAuth login at a time — running `wrangler login` overwrites `~/.wrangler/config/default.toml`, forcing you to re-login every time you switch accounts. `wrangler-accounts` saves each login as a named profile and runs `wrangler` inside a per-invocation **shadow HOME**, so different shells can use different Cloudflare accounts in parallel.
+
+```bash
+npm i -g @leeguoo/wrangler-accounts
+wrangler-accounts login work
+wrangler-accounts login personal
+wrangler-accounts --profile work deploy
+wrangler-accounts --profile personal tail my-worker
+```
+
+### How do I switch between Cloudflare Workers accounts without logging out?
+
+Use `wrangler-accounts --profile <name>` for a single command, or `wrangler-accounts default <name>` to set a persistent default. Neither touches your existing `~/.wrangler/config/default.toml`; profiles live in their own directory.
+
+### Can I run `wrangler dev` on one Cloudflare account while deploying to another?
+
+Yes. That's the whole point of the shadow HOME isolation — each shell gets its own temporary HOME with the profile's OAuth config, so two invocations never share state.
+
+```bash
+# terminal 1
+wrangler-accounts --profile work tail my-worker --format pretty
+
+# terminal 2
+wrangler-accounts --profile personal dev
+```
+
+### How do I use Wrangler with multiple accounts in CI?
+
+**Don't use `wrangler-accounts` in CI.** Use native env vars — `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` — with plain `wrangler`. That's what Cloudflare designed wrangler for; `wrangler-accounts` is a local developer convenience for juggling OAuth sessions on your workstation.
+
+### Is this like `aws-vault` / `aws --profile` but for Cloudflare?
+
+Yes. `wrangler-accounts` is to Cloudflare Wrangler what `aws --profile` and `aws-vault exec` are to the AWS CLI: named profiles, per-invocation isolation, subshell mode, AWS-style resolution order (`--profile` > `$WRANGLER_PROFILE` > persistent default). Unlike AWS CLI, `wrangler` has no native `--profile` flag, so `wrangler-accounts` sits in front of `wrangler` and sets up an isolated `HOME` per invocation.
+
+### How do I know if a saved profile still works?
+
+`wrangler-accounts list` shows a fast table with STATUS (derived from the saved `expiration_time`), but that can miss revoked refresh tokens. For an authoritative check, run:
+
+```bash
+wrangler-accounts list --deep
+```
+
+This spawns `wrangler whoami` inside each profile's shadow HOME and reports whether Cloudflare actually accepts the credentials.
+
+### I get "Not logged in" even though I just ran `wrangler login`
+
+If you used plain `wrangler login`, it wrote to your real `~/.wrangler/config/default.toml`. Capture that as a named profile before it gets overwritten:
+
+```bash
+wrangler-accounts save work
+```
+
+Or start fresh with `wrangler-accounts login work`, which does the OAuth flow inside an isolated shadow HOME and writes directly into the profile directory.
+
+## Discoverability
+
+Project: Cloudflare Wrangler multi-account manager — save and switch between multiple Cloudflare Workers OAuth logins without re-authenticating each time.
+
+**Search keywords**: cloudflare wrangler multi account, wrangler multiple accounts, cloudflare workers switch account, wrangler profile manager, wrangler login profiles, cloudflare account switcher, wrangler --profile, AWS-style profile for wrangler, aws-vault for cloudflare, wrangler oauth multi account, cloudflare workers different accounts, per-invocation isolation, shadow home, wrangler account management CLI.
+
+**AI agent keywords**: agent skill, skills.sh, Claude Code skill, Cursor skill, Codex skill, Gemini CLI skill — see "Install as an AI agent skill" above.
+
+Related tools / alternatives:
+- [AWS CLI `--profile`](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) — same concept for AWS, natively supported
+- [aws-vault](https://github.com/99designs/aws-vault) — OAuth-safe AWS profile wrapper that inspired the `exec` design here
+- [direnv](https://direnv.net/) — directory-based env switching (orthogonal, can be combined)
 
 ## Shell completion (zsh)
 
