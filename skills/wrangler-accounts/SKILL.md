@@ -72,6 +72,158 @@ Use `--json` for structured output.
 
 `wrangler-accounts gc [--older-than 1h]` — removes `wa-*` directories under `$TMPDIR` older than the threshold (default 1h). Safe to run at any time.
 
+## Common Recipes
+
+These are the patterns the user is most likely asking about when they mention "Cloudflare accounts", "wrangler", or "multi-account deploys". Pick the one that matches intent.
+
+### User wants: deploy a worker to a specific account
+
+```bash
+wrangler-accounts --profile work deploy
+```
+
+Or, when the user will be on this account for a while:
+
+```bash
+wrangler-accounts default work          # set once
+wrangler-accounts deploy                # uses work from now on
+wrangler-accounts deploy --env staging  # wrangler flags pass through unchanged
+```
+
+### User wants: tail production logs on one account while developing on another
+
+```bash
+# shell 1
+wrangler-accounts --profile work tail my-worker --format pretty
+
+# shell 2 (simultaneously, zero interference)
+wrangler-accounts --profile personal dev
+```
+
+The two shells each get their own shadow `HOME`, so there's no global state for the other to clobber.
+
+### User wants: run a deploy script / npm script / Makefile against a specific account
+
+```bash
+wrangler-accounts exec work -- npm run deploy
+wrangler-accounts exec work -- make release
+wrangler-accounts exec work -- bash scripts/deploy.sh
+```
+
+Anything inside the subshell that calls `wrangler` (directly, via `npx`, via `pnpm`, via a package.json script) automatically uses the `work` profile.
+
+### User wants: set up a new Cloudflare account from scratch
+
+```bash
+wrangler-accounts login new-account    # opens the browser OAuth flow
+wrangler-accounts whoami --profile new-account   # verify identity
+wrangler-accounts list                 # confirm the profile is saved
+```
+
+The login flow runs inside an isolated shadow `HOME`, so the user's real `~/.wrangler/config/default.toml` is never touched.
+
+### User wants: check which account a profile is tied to, without running wrangler
+
+```bash
+wrangler-accounts whoami --profile <name>           # text
+wrangler-accounts whoami --profile <name> --json    # structured
+```
+
+Returns the email + account ID from the saved `meta.json`. No network call.
+
+### User wants: swap between many accounts quickly in one shell
+
+Use `default` as a "current" setting:
+
+```bash
+wrangler-accounts default work
+wrangler-accounts deploy               # work
+wrangler-accounts default personal
+wrangler-accounts dev                  # personal
+```
+
+Or use positional shorthand inline:
+
+```bash
+wrangler-accounts work deploy          # one-shot, no persistent default
+wrangler-accounts personal dev
+```
+
+### User wants: run wrangler in CI with multiple accounts
+
+**Don't use `wrangler-accounts` in CI.** Use native env vars:
+
+```bash
+# In CI secrets:
+CLOUDFLARE_API_TOKEN=<token-with-workers-deploy-scope>
+CLOUDFLARE_ACCOUNT_ID=<account-id>
+
+# In the pipeline:
+wrangler deploy
+```
+
+`wrangler-accounts` is for **local developer** OAuth sessions. CI should use long-lived API tokens directly with plain `wrangler`. Recommend this even if the user asks to use `wrangler-accounts` in CI.
+
+## Troubleshooting
+
+### "Profile 'X' has expired Wrangler OAuth credentials"
+
+The saved OAuth access token is past its `expiration_time` and the refresh didn't happen (or Wrangler is older than 4.x). Refresh it interactively:
+
+```bash
+wrangler-accounts login <name>
+```
+
+This overwrites the existing profile with a fresh OAuth session. Any saved metadata (identity, etc.) is re-verified.
+
+### "No profile specified. Options: ..."
+
+The user ran `wrangler-accounts <wrangler-args>` without a resolvable profile. Fix one of:
+
+```bash
+wrangler-accounts --profile <name> <args>       # one-shot
+WRANGLER_PROFILE=<name> wrangler-accounts <args> # env var
+wrangler-accounts default <name>                # persistent default
+```
+
+### "Profile not found: X"
+
+The profile name doesn't exist in `profilesDir`. Check what's saved:
+
+```bash
+wrangler-accounts list
+```
+
+Create it with `wrangler-accounts login <name>` or copy an existing Wrangler login with `wrangler-accounts save <name>`.
+
+### Inside `wrangler-accounts exec`, `cd ~` lands in a weird tmpdir
+
+Expected. Inside an `exec` session, `$HOME` is the shadow HOME. The real home is still accessible:
+
+```bash
+cd "$WRANGLER_ACCOUNT_REAL_HOME"
+```
+
+Or users can add a shell alias: `alias realhome='cd "$WRANGLER_ACCOUNT_REAL_HOME"'`.
+
+### Deprecated `use` command warning
+
+`wrangler-accounts use <name>` still works but prints a deprecation warning. Suggest the replacement based on intent:
+
+- "I want this account to stick for a while" → `wrangler-accounts default <name>`
+- "Just this one command" → `wrangler-accounts --profile <name> <wrangler-args>`
+
+### Shell history / `.zsh_history` seems to grow when running `exec`
+
+Intentional. By design the shadow HOME symlinks all top-level entries of real HOME except `.wrangler`, so shell history writes pass through to the real file. This is a **convenience** bias, not a clean-room sandbox — the goal is that `exec` subshells feel like a normal terminal with a different Cloudflare account, not a jail.
+
+## Invariants the AI should rely on
+
+- **Real `~/.wrangler/config/default.toml` is never written to by `wrangler-accounts`.** If a user reports that it changed, something else touched it (e.g. a direct `wrangler login` outside `wrangler-accounts`).
+- **Two `wrangler-accounts --profile A` and `wrangler-accounts --profile B` running in parallel never clobber each other.** Each gets its own `mkdtemp` shadow HOME.
+- **OAuth token refresh inside a profile is automatic.** The shadow HOME contains a symlink from `.wrangler/config/default.toml` to the saved profile file, so Wrangler's in-place `fs.writeFileSync` during `refreshToken()` flows straight back to the profile.
+- **`wrangler-accounts <args>` without a management subcommand forwards everything to wrangler verbatim**, including `--env`, `--dry-run`, `--json`, and any wrangler-native flags. The only flags consumed by `wrangler-accounts` itself are the ones listed in "Paths and environment" below.
+
 ## CI guidance
 
 For CI and deploy pipelines, **use `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` with plain `wrangler`**, not saved OAuth profiles. `wrangler-accounts` is a local developer convenience for juggling OAuth sessions on your workstation, not a CI primitive.

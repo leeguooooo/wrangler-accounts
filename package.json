@@ -8,7 +8,8 @@
   },
   "files": [
     "bin",
-    "completions"
+    "completions",
+    "skills"
   ],
   "keywords": [
     "cloudflare",
