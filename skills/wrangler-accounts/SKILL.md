@@ -1,85 +1,98 @@
 ---
 name: wrangler-accounts
-description: Manage multiple Cloudflare Wrangler login profiles with the wrangler-accounts CLI. Use when Codex needs to list profiles, inspect status, save or login profiles, switch active configs, remove profiles, or adjust config/profiles paths via flags or env vars.
+description: AWS-style multi-account convenience for Cloudflare Wrangler. Use when you need to run wrangler commands against a specific Cloudflare account, manage saved OAuth profiles, set or switch the persistent default profile, or open an isolated subshell for a profile. Prefer --json for machine-readable output.
 ---
 
 # Wrangler Accounts
 
 ## Overview
 
-Use the wrangler-accounts CLI to save, switch, and inspect Cloudflare Wrangler login profiles by copying the Wrangler config file. Prefer --json when returning data to another tool.
+`wrangler-accounts` runs `wrangler` under per-invocation **shadow HOME** isolation, so multiple shells can use different Cloudflare accounts in parallel without any global switching. Profile resolution order: `--profile` / `-p` > positional shorthand > `$WRANGLER_PROFILE` > `profilesDir/default` > hard error.
 
 ## Quick Start
 
-- `wrangler-accounts list`
-- `wrangler-accounts status`
-- `wrangler-accounts save <name>`
-- `wrangler-accounts use <name>`
+- `wrangler-accounts login <name>` — interactive OAuth login into a new profile (never touches real `~/.wrangler`)
+- `wrangler-accounts default <name>` — set the persistent default profile
+- `wrangler-accounts deploy` — run `wrangler deploy` under the default profile
+- `wrangler-accounts --profile personal deploy` — one-shot override
+- `wrangler-accounts exec work -- npm run release` — run a command in an isolated subshell for the `work` profile
 
 ## Tasks
 
-### List profiles
+### Run wrangler against a profile
 
-Run:
+Per-invocation (preferred for scripts):
 
-`wrangler-accounts list`
+`wrangler-accounts --profile <name> <wrangler-args...>`
 
-For machine output, use:
+Or with env var:
 
-`wrangler-accounts list --json` or `wrangler-accounts list --plain`
+`WRANGLER_PROFILE=<name> wrangler-accounts <wrangler-args...>`
 
-Backups are hidden by default; pass `--include-backups` to show them.
+Or positional shorthand (only when `<name>` is a saved profile name, not a management subcommand):
 
-### Check status
+`wrangler-accounts <name> <wrangler-args...>`
 
-Run:
+### Open a subshell for a profile
 
-`wrangler-accounts status`
+`wrangler-accounts exec <name>` — launches `$SHELL -i` with isolated `HOME` and `WRANGLER_PROFILE` set. Everything inside the subshell sees the profile, including nested `npm run` scripts, Makefiles, and `npx wrangler`.
 
-Use `--json` to read fields like `configPath`, `profilesDir`, `activeProfile`, and `matchingProfile`.
+Run a single command instead:
 
-### Save current config as a profile
+`wrangler-accounts exec <name> -- <cmd> [args]`
 
-Run:
+### Manage the persistent default profile
 
-`wrangler-accounts save <name>`
+- `wrangler-accounts default` — print current default (exit 1 if none set)
+- `wrangler-accounts default <name>` — set the default
+- `wrangler-accounts default --unset` — clear the default
+- `wrangler-accounts default --json` — JSON output
 
-Use `--force` to overwrite an existing profile.
+### Show the resolved identity for a profile
 
-### Login and save a profile
+`wrangler-accounts whoami [--profile <name>]` — reports the profile name, source tier (cli / positional / env / default), and identity from `meta.json`. Does not spawn wrangler.
 
-Run:
+Use `--json` for structured output.
 
-`wrangler-accounts login <name>`
+### List and inspect profiles
 
-This runs `wrangler login` first, then saves the config under the name.
+- `wrangler-accounts list` / `list --json` / `list --plain`
+- `wrangler-accounts status` / `status --json`
+- Pass `--include-backups` to show hidden backup profiles.
 
-### Switch to a profile
+### Save, sync, login, remove
 
-Run:
+- `wrangler-accounts save <name>` — snapshot current Wrangler config as a profile
+- `wrangler-accounts sync <name>` — refresh a specific profile from the current login
+- `wrangler-accounts sync-default` — refresh the default profile
+- `wrangler-accounts login <name>` — fresh isolated OAuth login
+- `wrangler-accounts remove <name>` — delete a profile
 
-`wrangler-accounts use <name>`
+### Clean up stale shadow HOMEs
 
-Keep backups on by default; pass `--no-backup` to disable. With `--json`, read `backupName` when a backup is created.
+`wrangler-accounts gc [--older-than 1h]` — removes `wa-*` directories under `$TMPDIR` older than the threshold (default 1h). Safe to run at any time.
 
-### Remove a profile
+## CI guidance
 
-Run:
+For CI and deploy pipelines, **use `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` with plain `wrangler`**, not saved OAuth profiles. `wrangler-accounts` is a local developer convenience for juggling OAuth sessions on your workstation, not a CI primitive.
 
-`wrangler-accounts remove <name>`
+## Paths and environment
 
-## Paths and Environment
+- `--profile <name>` / `-p <name>` — profile for this invocation (v1.0: `-p` means `--profile`)
+- `--profiles <path>` — profiles directory (long form only since v1.0)
+- `-c, --config <path>` — Wrangler config path
+- `WRANGLER_PROFILE` — profile to use when no `--profile` flag is given
+- `WRANGLER_CONFIG_PATH`, `WRANGLER_ACCOUNTS_DIR`, `XDG_CONFIG_HOME` — path overrides
 
-Use `--config` to point at a Wrangler config path and `--profiles` for the profiles directory. The tool also reads:
+## Output conventions
 
-- `WRANGLER_CONFIG_PATH`
-- `WRANGLER_ACCOUNTS_DIR`
-- `XDG_CONFIG_HOME`
+Use `--json` when another tool needs to parse results. All v1.0 commands that produce structured data support `--json`.
 
-## Output Conventions
+## Naming rules
 
-Prefer `--json` when another tool needs to parse results. Non-list commands return an action payload with `command`, `name`, and relevant paths.
+Profile names: letters, numbers, dot, underscore, dash only. Names matching management subcommand names (`exec`, `default`, `whoami`, `gc`, `login`, `list`, `status`, `save`, `sync`, `sync-default`, `remove`, `use`, `sync-active`) cannot be reached via positional shorthand — use `--profile <name>` for those.
 
-## Naming Rules
+## Deprecated
 
-Use only letters, numbers, dot, underscore, and dash in profile names.
+- `wrangler-accounts use <name>` — deprecated, prints warning. Use `default <name>` for persistence or `--profile <name>` for one-shot.
+- `wrangler-accounts sync-active` — deprecated alias for `sync-default`.
