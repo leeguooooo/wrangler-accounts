@@ -7,6 +7,13 @@ const os = require("os");
 const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 
+const {
+  expandHome,
+  resolvePath,
+  detectConfigPath,
+  detectProfilesDir,
+} = require("../lib/paths");
+
 let outputJson = false;
 
 function die(message, exitCode = 1) {
@@ -59,18 +66,6 @@ Examples:
   process.exit(exitCode);
 }
 
-function expandHome(p) {
-  if (!p) return p;
-  if (p === "~") return os.homedir();
-  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
-  return p;
-}
-
-function resolvePath(p) {
-  if (!p) return p;
-  return path.resolve(expandHome(p));
-}
-
 function parseArgs(argv) {
   const opts = {
     json: false,
@@ -108,39 +103,6 @@ function parseArgs(argv) {
     }
   }
   return { opts, rest };
-}
-
-function detectConfigPath(cliPath) {
-  if (cliPath) return resolvePath(cliPath);
-  if (process.env.WRANGLER_CONFIG_PATH) {
-    return resolvePath(process.env.WRANGLER_CONFIG_PATH);
-  }
-
-  const home = os.homedir();
-  const candidates = [
-    path.join(home, ".wrangler", "config", "default.toml"),
-    path.join(home, "Library", "Preferences", ".wrangler", "config", "default.toml"),
-    path.join(home, ".config", ".wrangler", "config", "default.toml"),
-    path.join(home, ".config", "wrangler", "config", "default.toml"),
-  ];
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-
-  return candidates[0];
-}
-
-function detectProfilesDir(cliPath) {
-  if (cliPath) return resolvePath(cliPath);
-  if (process.env.WRANGLER_ACCOUNTS_DIR) {
-    return resolvePath(process.env.WRANGLER_ACCOUNTS_DIR);
-  }
-
-  const xdg = process.env.XDG_CONFIG_HOME;
-  if (xdg) return path.join(resolvePath(xdg), "wrangler-accounts");
-
-  return path.join(os.homedir(), ".config", "wrangler-accounts");
 }
 
 function ensureDir(dirPath) {
