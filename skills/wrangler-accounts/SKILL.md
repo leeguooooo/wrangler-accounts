@@ -245,9 +245,24 @@ Intentional. By design the shadow HOME symlinks all top-level entries of real HO
 ## Invariants the AI should rely on
 
 - **Real `~/.wrangler/config/default.toml` is never written to by `wrangler-accounts`.** If a user reports that it changed, something else touched it (e.g. a direct `wrangler login` outside `wrangler-accounts`).
-- **Two `wrangler-accounts --profile A` and `wrangler-accounts --profile B` running in parallel never clobber each other.** Each gets its own `mkdtemp` shadow HOME.
+- **Two `wrangler-accounts --profile A` and `wrangler-accounts --profile B` running in parallel never clobber each other on credentials OR account-id cache.** Each gets its own `mkdtemp` shadow HOME, and each gets its own per-profile `WRANGLER_CACHE_DIR` (next to the profile's `config.toml`) so that wrangler's `wrangler-account.json` (which stores the selected Cloudflare account ID) is naturally isolated.
 - **OAuth token refresh inside a profile is automatic.** The shadow HOME contains a symlink from `.wrangler/config/default.toml` to the saved profile file, so Wrangler's in-place `fs.writeFileSync` during `refreshToken()` flows straight back to the profile.
 - **`wrangler-accounts <args>` without a management subcommand forwards everything to wrangler verbatim**, including `--env`, `--dry-run`, `--json`, and any wrangler-native flags. The only flags consumed by `wrangler-accounts` itself are the ones listed in "Paths and environment" below.
+
+## What is and isn't isolated
+
+| State | Location | Isolated? |
+|---|---|---|
+| OAuth credentials (`config.toml`) | shadow `$HOME/.wrangler/config/default.toml` → symlink to per-profile file | ✅ per profile |
+| Account-id cache (`wrangler-account.json`) | per-profile `WRANGLER_CACHE_DIR` (= `<profilesDir>/<name>/cache/`) | ✅ per profile |
+| Pages config cache (`pages-config-cache.json`) | same as above | ✅ per profile |
+| Miniflare dev registry | `WRANGLER_REGISTRY_PATH` = `$realHome/.wrangler/registry` | ❌ shared on purpose (cross-profile worker discovery during local dev) |
+| Wrangler debug logs | `WRANGLER_LOG_PATH` = `$realHome/.wrangler/logs` | ❌ shared (append-only, harmless) |
+| Project-local state (`./.wrangler/state/`, `./node_modules/.cache/wrangler`) | inside the project directory | ❌ shared at project level (per-project, but not per-profile) |
+| `cloudflared` binary | `CLOUDFLARED_PATH` or `~/.wrangler/cloudflared/` | ❌ shared (binary, not account-scoped) |
+| Shell history, npm cache, git config, ssh keys | symlinked through to real `$HOME` | ❌ shared by design (so `exec` subshells feel like a normal terminal) |
+
+If a user is hitting a "wrong account" symptom and the credentials look right, the most likely culprit is **project-local state** in `./.wrangler/state/` — clear that and re-run.
 
 ## CI guidance
 

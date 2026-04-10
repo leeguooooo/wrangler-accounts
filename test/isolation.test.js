@@ -172,9 +172,11 @@ test('buildIsolatedEnv sets HOME, WRANGLER_PROFILE, and pass-through paths', () 
   assert.equal(env.WRANGLER_ACCOUNT, 'work');
   assert.equal(env.WRANGLER_ACCOUNT_REAL_HOME, '/Users/fake');
   assert.equal(env.WRANGLER_REGISTRY_PATH, '/Users/fake/.wrangler/registry');
-  assert.equal(env.WRANGLER_CACHE_DIR, '/Users/fake/.wrangler/cache');
   assert.equal(env.WRANGLER_LOG_PATH, '/Users/fake/.wrangler/logs');
   assert.equal(env.WRANGLER_SEND_METRICS, 'false');
+  // WRANGLER_CACHE_DIR is intentionally NOT set when profileCfg is omitted
+  // (would otherwise force all callers into one shared global cache)
+  assert.equal('WRANGLER_CACHE_DIR' in env, false);
   // base env preserved
   assert.equal(env.PATH, '/usr/bin');
   assert.equal(env.FOO, 'bar');
@@ -197,6 +199,66 @@ test('buildIsolatedEnv includes CLOUDFLARED_PATH only when provided', () => {
     baseEnv: {},
   });
   assert.equal('CLOUDFLARED_PATH' in envWithout, false);
+});
+
+test('buildIsolatedEnv sets WRANGLER_CACHE_DIR per-profile when profileCfg provided', () => {
+  const realHome = mkFakeRealHome();
+  const { profileCfg } = mkProfile();
+  const env = buildIsolatedEnv({
+    shadow: '/tmp/fake-shadow',
+    realHome,
+    profile: 'work',
+    profileCfg,
+    baseEnv: {},
+  });
+  // cache must be next to the profile config, NOT under real home
+  const expected = path.join(path.dirname(profileCfg), 'cache');
+  assert.equal(env.WRANGLER_CACHE_DIR, expected);
+  assert.notEqual(env.WRANGLER_CACHE_DIR, path.join(realHome, '.wrangler', 'cache'));
+  // and the dir should exist (so wrangler doesn't ENOENT writing wrangler-account.json)
+  assert.equal(fs.existsSync(env.WRANGLER_CACHE_DIR), true);
+});
+
+test('buildIsolatedEnv omits WRANGLER_CACHE_DIR when profileCfg not provided', () => {
+  // Lets wrangler use its own discovery (cwd-based), important for callers
+  // that don't have a profile context yet.
+  const env = buildIsolatedEnv({
+    shadow: '/a',
+    realHome: '/b',
+    profile: 'w',
+    baseEnv: {},
+  });
+  assert.equal('WRANGLER_CACHE_DIR' in env, false);
+});
+
+test('REGRESSION: two profiles get separate cache dirs (no account-id leak)', () => {
+  // The 1.2.1 bug: WRANGLER_CACHE_DIR pointed at $realHome/.wrangler/cache
+  // for every profile, so wrangler-account.json from profile A could be
+  // read by profile B. Verify each profile gets its own cache.
+  const realHome = mkFakeRealHome();
+  const profilesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-regress-'));
+  fs.mkdirSync(path.join(profilesDir, 'A'));
+  fs.writeFileSync(path.join(profilesDir, 'A', 'config.toml'), 'oauth_token = "a"\n');
+  fs.mkdirSync(path.join(profilesDir, 'B'));
+  fs.writeFileSync(path.join(profilesDir, 'B', 'config.toml'), 'oauth_token = "b"\n');
+
+  const envA = buildIsolatedEnv({
+    shadow: '/a',
+    realHome,
+    profile: 'A',
+    profileCfg: path.join(profilesDir, 'A', 'config.toml'),
+    baseEnv: {},
+  });
+  const envB = buildIsolatedEnv({
+    shadow: '/b',
+    realHome,
+    profile: 'B',
+    profileCfg: path.join(profilesDir, 'B', 'config.toml'),
+    baseEnv: {},
+  });
+  assert.notEqual(envA.WRANGLER_CACHE_DIR, envB.WRANGLER_CACHE_DIR);
+  assert.equal(envA.WRANGLER_CACHE_DIR, path.join(profilesDir, 'A', 'cache'));
+  assert.equal(envB.WRANGLER_CACHE_DIR, path.join(profilesDir, 'B', 'cache'));
 });
 
 test('runIsolated spawns child with shadow HOME and correct env', () => {
@@ -223,7 +285,11 @@ test('runIsolated spawns child with shadow HOME and correct env', () => {
   assert.equal(payload.env.WRANGLER_PROFILE, 'work');
   assert.equal(payload.env.WRANGLER_ACCOUNT, 'work');
   assert.equal(payload.env.WRANGLER_REGISTRY_PATH, path.join(realHome, '.wrangler/registry'));
-  assert.equal(payload.env.WRANGLER_CACHE_DIR, path.join(realHome, '.wrangler/cache'));
+  // WRANGLER_CACHE_DIR is per-profile (next to the profile config), NOT
+  // shared under realHome — see "REGRESSION: two profiles get separate
+  // cache dirs" test for the rationale.
+  assert.equal(payload.env.WRANGLER_CACHE_DIR, path.join(path.dirname(profileCfg), 'cache'));
+  assert.notEqual(payload.env.WRANGLER_CACHE_DIR, path.join(realHome, '.wrangler/cache'));
   assert.equal(payload.env.WRANGLER_SEND_METRICS, 'false');
   // shadow HOME should be cleaned up after runIsolated returns
   assert.equal(fs.existsSync(payload.home), false);

@@ -164,9 +164,27 @@ Inside an isolated session, these are automatically set for the child process:
 - `HOME` — the shadow HOME
 - `WRANGLER_PROFILE` / `WRANGLER_ACCOUNT` — current profile name (useful for shell prompt integration)
 - `WRANGLER_ACCOUNT_REAL_HOME` — path to your real home (escape hatch)
-- `WRANGLER_REGISTRY_PATH`, `WRANGLER_CACHE_DIR`, `WRANGLER_LOG_PATH` — pointed back at real HOME so Miniflare dev registry, workerd cache, and debug logs are shared across profiles
+- `WRANGLER_CACHE_DIR` — **per-profile**, points at `<profilesDir>/<name>/cache/`. Holds wrangler's `wrangler-account.json` (selected account ID), `pages-config-cache.json`, etc. Isolating this is critical: see "What is and isn't isolated" below.
+- `WRANGLER_REGISTRY_PATH`, `WRANGLER_LOG_PATH` — pointed at real HOME so Miniflare dev registry and debug logs are shared across profiles (cross-profile dev worker discovery is intentional)
 - `CLOUDFLARED_PATH` — set when `cloudflared` is on your PATH
 - `WRANGLER_SEND_METRICS=false`
+
+## What is and isn't isolated
+
+`wrangler-accounts` isolates the things that determine **which account a wrangler command targets**, but deliberately shares some state for performance and ergonomics. Know the boundary:
+
+| State | Location | Isolated? |
+|---|---|---|
+| OAuth credentials (`config.toml`, refresh token) | shadow `$HOME/.wrangler/config/default.toml` → symlink to per-profile file | ✅ per profile |
+| Account-id cache (`wrangler-account.json`) | `WRANGLER_CACHE_DIR` = `<profilesDir>/<name>/cache/` | ✅ per profile |
+| Pages config cache | same as above | ✅ per profile |
+| Miniflare dev registry | `WRANGLER_REGISTRY_PATH` = `$HOME/.wrangler/registry` | ❌ **shared** (intentional — local dev workers discover each other across profiles) |
+| Wrangler debug logs | `WRANGLER_LOG_PATH` = `$HOME/.wrangler/logs` | ❌ **shared** (append-only) |
+| Project-local state (`./.wrangler/state/`, `./node_modules/.cache/wrangler`) | inside the project directory | ❌ **shared at project level** — same project from two profiles uses the same project-local state. If you hit a "wrong account" symptom, clearing `./.wrangler/state/` is a good first step. |
+| `cloudflared` binary cache | `~/.wrangler/cloudflared/` or `$CLOUDFLARED_PATH` | ❌ shared (binary, not account-scoped) |
+| Shell history, `.npmrc`, `.gitconfig`, `.ssh/` etc. | symlinked through to real `$HOME` | ❌ shared by design (so `exec` subshells feel like a normal terminal) |
+
+> **Why this matters**: in 1.2.1 and earlier, `WRANGLER_CACHE_DIR` was pointed at real `$HOME/.wrangler/cache`, which meant `wrangler-account.json` was shared across profiles. Profile A's OAuth token could end up paired with profile B's cached account ID, causing wrangler to write resources to the wrong account *silently*. Fixed in 1.2.2 by per-profile `WRANGLER_CACHE_DIR`. Upgrade if you're on ≤1.2.1.
 
 ## Breaking changes in 1.0
 

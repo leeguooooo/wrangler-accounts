@@ -706,33 +706,47 @@ function main() {
     const shadowWranglerConfig = path.join(shadow, ".wrangler", "config");
     fs.mkdirSync(shadowWranglerConfig, { recursive: true });
 
+    // Pre-create the profile dir so per-profile cache lands in the right
+    // place even though config.toml doesn't exist yet (login will write
+    // it). This makes WRANGLER_CACHE_DIR isolated from the very first
+    // command, including the login flow itself. We remember whether the
+    // dir existed before so we can clean it up if login fails.
+    const profileDir = path.join(profilesDir, name);
+    const existed = fs.existsSync(path.join(profileDir, "config.toml"));
+    const profileDirExistedBefore = fs.existsSync(profileDir);
+    ensureDir(profileDir);
+    const futureProfileCfg = path.join(profileDir, "config.toml");
+
     const env = buildIsolatedEnv({
       shadow,
       realHome,
       profile: name,
+      profileCfg: futureProfileCfg,
       baseEnv: process.env,
       cloudflaredPath: findCloudflared(),
     });
-
-    const profileDir = path.join(profilesDir, name);
-    const existed = fs.existsSync(profileDir);
     let identity = null;
+    let loginSucceeded = false;
 
+    // Use throw + catch + finally so cleanup always runs. die() calls
+    // process.exit() synchronously, which would skip the finally block —
+    // and that would leave a half-created profile dir behind on failure.
+    let errorMsg = null;
     try {
       const loginResult = spawnSync("wrangler", ["login"], {
         stdio: "inherit",
         env,
       });
       if (loginResult.error) {
-        die(`Failed to run 'wrangler login': ${loginResult.error.message}`);
+        throw new Error(`Failed to run 'wrangler login': ${loginResult.error.message}`);
       }
       if (loginResult.status !== 0) {
-        die(`'wrangler login' exited with code ${loginResult.status}`);
+        throw new Error(`'wrangler login' exited with code ${loginResult.status}`);
       }
 
       const freshCfg = path.join(shadowWranglerConfig, "default.toml");
       if (!fs.existsSync(freshCfg)) {
-        die(`wrangler login completed but no config was written at ${freshCfg}`);
+        throw new Error(`wrangler login completed but no config was written at ${freshCfg}`);
       }
 
       // Verify identity via `wrangler whoami` in the same shadow.
@@ -743,18 +757,30 @@ function main() {
       const output = `${whoamiResult.stdout || ""}\n${whoamiResult.stderr || ""}`;
       identity = parseWranglerWhoamiOutput(output);
       if (!identity) {
-        die("Login succeeded but could not parse 'wrangler whoami' output");
+        throw new Error("Login succeeded but could not parse 'wrangler whoami' output");
       }
 
       // Move the fresh config into the profile directory. Use writeFile
       // (copy) so the profile config is a real file, not a symlink.
-      ensureDir(profileDir);
+      // (profileDir was already pre-created above for cache isolation.)
       const destCfg = path.join(profileDir, "config.toml");
       fs.copyFileSync(freshCfg, destCfg);
       writeMeta(profileDir, name, destCfg, identity);
+      loginSucceeded = true;
+    } catch (err) {
+      errorMsg = err.message;
     } finally {
       cleanupShadow(shadow);
+      // If login failed AND we created the profile dir as a side effect
+      // of cache isolation (it didn't exist before), clean it up so the
+      // user doesn't see a half-empty profile.
+      if (!loginSucceeded && !profileDirExistedBefore) {
+        try {
+          fs.rmSync(profileDir, { recursive: true, force: true });
+        } catch {}
+      }
     }
+    if (errorMsg) die(errorMsg);
 
     const note = existed ? " (overwritten)" : "";
     if (opts.json) {
