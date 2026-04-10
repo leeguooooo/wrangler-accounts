@@ -46,7 +46,11 @@ const {
   findProfilesByIdentity,
 } = require("../lib/identity");
 const { resolveProfile, ResolveError } = require("../lib/resolve");
-const { runIsolated } = require("../lib/isolation");
+const {
+  runIsolated,
+  buildIsolatedEnv,
+  cleanupShadow,
+} = require("../lib/isolation");
 
 const MANAGEMENT_SUBCOMMANDS = new Set([
   "list",
@@ -497,15 +501,74 @@ function main() {
   if (command === "login") {
     const name = rest[1];
     if (!name) die("Missing profile name for login");
+    if (!isValidName(name)) die(`Invalid profile name: ${name}`);
     ensureDir(profilesDir);
-    runWranglerLogin();
-    if (!fs.existsSync(configPath)) {
-      die(`Config file not found after login: ${configPath}`);
+
+    // Create a shadow HOME without pre-linking .wrangler/config/default.toml.
+    // wrangler login will write a fresh file into shadow/.wrangler/config/
+    // which we then move into the profile directory.
+    const realHome = os.homedir();
+    const shadow = fs.mkdtempSync(path.join(os.tmpdir(), `wa-login-${name}-`));
+    fs.chmodSync(shadow, 0o700);
+    for (const entry of fs.readdirSync(realHome)) {
+      if (entry === ".wrangler") continue;
+      try {
+        fs.symlinkSync(path.join(realHome, entry), path.join(shadow, entry));
+      } catch {}
     }
+    const shadowWranglerConfig = path.join(shadow, ".wrangler", "config");
+    fs.mkdirSync(shadowWranglerConfig, { recursive: true });
+
+    const env = buildIsolatedEnv({
+      shadow,
+      realHome,
+      profile: name,
+      baseEnv: process.env,
+      cloudflaredPath: findCloudflared(),
+    });
+
     const profileDir = path.join(profilesDir, name);
     const existed = fs.existsSync(profileDir);
-    const refreshedIdentityResult = getCurrentIdentity(configPath);
-    saveProfile(name, configPath, profilesDir, true, refreshedIdentityResult.identity);
+    let identity = null;
+
+    try {
+      const loginResult = spawnSync("wrangler", ["login"], {
+        stdio: "inherit",
+        env,
+      });
+      if (loginResult.error) {
+        die(`Failed to run 'wrangler login': ${loginResult.error.message}`);
+      }
+      if (loginResult.status !== 0) {
+        die(`'wrangler login' exited with code ${loginResult.status}`);
+      }
+
+      const freshCfg = path.join(shadowWranglerConfig, "default.toml");
+      if (!fs.existsSync(freshCfg)) {
+        die(`wrangler login completed but no config was written at ${freshCfg}`);
+      }
+
+      // Verify identity via `wrangler whoami` in the same shadow.
+      const whoamiResult = spawnSync("wrangler", ["whoami"], {
+        env,
+        encoding: "utf8",
+      });
+      const output = `${whoamiResult.stdout || ""}\n${whoamiResult.stderr || ""}`;
+      identity = parseWranglerWhoamiOutput(output);
+      if (!identity) {
+        die("Login succeeded but could not parse 'wrangler whoami' output");
+      }
+
+      // Move the fresh config into the profile directory. Use writeFile
+      // (copy) so the profile config is a real file, not a symlink.
+      ensureDir(profileDir);
+      const destCfg = path.join(profileDir, "config.toml");
+      fs.copyFileSync(freshCfg, destCfg);
+      writeMeta(profileDir, name, destCfg, identity);
+    } finally {
+      cleanupShadow(shadow);
+    }
+
     const note = existed ? " (overwritten)" : "";
     if (opts.json) {
       console.log(
@@ -513,17 +576,18 @@ function main() {
           {
             command: "login",
             name,
-            configPath,
             profilesDir,
             overwritten: existed,
-            identity: refreshedIdentityResult.identity,
+            identity,
           },
           null,
           2
         )
       );
     } else {
-      console.log(`Logged in and saved profile '${name}' from ${configPath}${note}`);
+      console.log(
+        `Logged in and saved profile '${name}' (${describeIdentity(identity)})${note}`
+      );
     }
     return;
   }
