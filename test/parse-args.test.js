@@ -122,3 +122,21 @@ test('-p is now --profile (v1.0 breaking change)', () => {
   assert.equal(r.status, 0, `stderr=${r.stderr}`);
   assert.equal(r.payload.env.WRANGLER_PROFILE, 'work');
 });
+
+test('--version prints package.json version', () => {
+  const pkg = require('../package.json');
+  for (const flag of ['--version', '-v', '-V']) {
+    const r = spawnSync(process.execPath, [CLI, flag], { encoding: 'utf8' });
+    assert.equal(r.status, 0, `stderr=${r.stderr}`);
+    assert.equal(r.stdout.trim(), pkg.version, `flag=${flag}`);
+  }
+});
+
+test('--version --json prints structured payload', () => {
+  const pkg = require('../package.json');
+  const r = spawnSync(process.execPath, [CLI, '--version', '--json'], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  const payload = JSON.parse(r.stdout);
+  assert.equal(payload.version, pkg.version);
+  assert.equal(payload.name, pkg.name);
+});

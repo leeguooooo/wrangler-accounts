@@ -144,6 +144,7 @@ Options:
   --backup                Backup current config on use (default)
   --no-backup             Disable backup on use
   -h, --help              Show help
+  -v, --version           Print version
 
 Env:
   WRANGLER_CONFIG_PATH
@@ -196,6 +197,8 @@ function parseArgs(argv) {
 
     if (arg === "--help" || arg === "-h") {
       opts.help = true;
+    } else if (arg === "--version" || arg === "-v" || arg === "-V") {
+      opts.version = true;
     } else if (arg === "--json") {
       opts.json = true;
     } else if (arg === "--plain") {
@@ -327,6 +330,15 @@ function main() {
   outputJson = argv.includes("--json");
   const { opts, rest } = parseArgs(argv);
   if (opts.help) printHelp(0);
+  if (opts.version) {
+    const pkg = require("../package.json");
+    if (opts.json) {
+      console.log(JSON.stringify({ name: pkg.name, version: pkg.version }, null, 2));
+    } else {
+      console.log(pkg.version);
+    }
+    process.exit(0);
+  }
 
   const command = rest[0];
   if (!command) printHelp(1);
