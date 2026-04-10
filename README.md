@@ -36,6 +36,8 @@ wrangler-accounts list
 wrangler-accounts status
 wrangler-accounts login work
 wrangler-accounts save work
+wrangler-accounts sync work
+wrangler-accounts sync-active
 wrangler-accounts use personal
 wrangler-accounts remove old
 ```
@@ -47,6 +49,7 @@ wrangler-accounts remove old
 -p, --profiles <path>   Profiles directory
 --json                  JSON output for all commands
 --plain                 Plain output for list (one name per line)
+--include-backups       Include backup profiles in list/status
 -f, --force             Overwrite existing profile on save
 --backup                Backup current config on use (default)
 --no-backup             Disable backup on use
@@ -67,6 +70,7 @@ Examples:
 ```bash
 wrangler-accounts list --json
 wrangler-accounts status --json
+wrangler-accounts sync-active --json
 wrangler-accounts use personal --json
 ```
 
@@ -89,6 +93,10 @@ The profiles directory defaults to:
 - Profile names accept only letters, numbers, dot, underscore, and dash.
 - On `use`, the current config is backed up into `__backup-YYYYMMDD-HHMMSS` unless you pass `--no-backup`.
 - `login <name>` overwrites an existing profile with the same name.
+- Backups are hidden from `list` and `status` unless you pass `--include-backups`.
+- Saved OAuth sessions can expire. If a profile is expired, `use <name>` will stop and tell you to run `login <name>` again.
+- `status` uses `wrangler whoami` to detect the current account identity and can report when the current login can refresh an existing profile.
+- `sync <name>` updates a profile from the current logged-in Wrangler session. `sync-active` does the same for the active profile.
 
 ## Discoverability (SEO / GEO / AI search)
 

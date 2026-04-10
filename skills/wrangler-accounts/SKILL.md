@@ -28,6 +28,8 @@ For machine output, use:
 
 `wrangler-accounts list --json` or `wrangler-accounts list --plain`
 
+Backups are hidden by default; pass `--include-backups` to show them.
+
 ### Check status
 
 Run:

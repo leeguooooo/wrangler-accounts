@@ -29,6 +29,8 @@ Commands:
   status
   login <name>
   save <name>
+  sync <name>
+  sync-active
   use <name>
   remove <name>
 
@@ -37,6 +39,7 @@ Options:
   -p, --profiles <path>   Profiles directory
   --json                  JSON output for all commands
   --plain                 Plain output for list (one name per line)
+  --include-backups       Include backup profiles in list/status
   -f, --force             Overwrite existing profile on save
   --backup                Backup current config on use (default)
   --no-backup             Disable backup on use
@@ -49,6 +52,7 @@ Env:
 
 Examples:
   wrangler-accounts save work
+  wrangler-accounts sync-active
   wrangler-accounts use personal
 `;
   console.log(text);
@@ -72,6 +76,7 @@ function parseArgs(argv) {
     json: false,
     force: false,
     backup: true,
+    includeBackups: false,
   };
   const rest = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -82,6 +87,8 @@ function parseArgs(argv) {
       opts.json = true;
     } else if (arg === "--plain") {
       opts.plain = true;
+    } else if (arg === "--include-backups") {
+      opts.includeBackups = true;
     } else if (arg === "--force" || arg === "-f") {
       opts.force = true;
     } else if (arg === "--backup") {
@@ -144,12 +151,17 @@ function isValidName(name) {
   return /^[A-Za-z0-9._-]+$/.test(name);
 }
 
-function listProfiles(profilesDir) {
+function isBackupName(name) {
+  return name.startsWith("__backup-");
+}
+
+function listProfiles(profilesDir, { includeBackups = false } = {}) {
   if (!fs.existsSync(profilesDir)) return [];
   const entries = fs.readdirSync(profilesDir, { withFileTypes: true });
   return entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
+    .filter((name) => includeBackups || !isBackupName(name))
     .filter((name) => fs.existsSync(path.join(profilesDir, name, "config.toml")))
     .sort();
 }
@@ -157,6 +169,101 @@ function listProfiles(profilesDir) {
 function fileHash(filePath) {
   const data = fs.readFileSync(filePath);
   return crypto.createHash("sha256").update(data).digest("hex");
+}
+
+function readExpirationTime(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  const text = fs.readFileSync(filePath, "utf8");
+  const match = text.match(/^\s*expiration_time\s*=\s*"([^"]+)"/m);
+  return match ? match[1] : null;
+}
+
+function readSessionState(filePath) {
+  const expirationTime = readExpirationTime(filePath);
+  if (!expirationTime) {
+    return {
+      expirationTime: null,
+      expired: null,
+    };
+  }
+
+  const expiresAt = new Date(expirationTime);
+  if (Number.isNaN(expiresAt.getTime())) {
+    return {
+      expirationTime,
+      expired: null,
+    };
+  }
+
+  return {
+    expirationTime,
+    expired: expiresAt.getTime() <= Date.now(),
+  };
+}
+
+function parseWranglerWhoamiOutput(output) {
+  const text = output || "";
+  const emailMatch = text.match(/associated with the email ([^\n]+?)\.\s*$/m);
+  const rowRegex = /│\s*(.+?)\s*│\s*([a-f0-9]{32})\s*│/g;
+  const rows = [...text.matchAll(rowRegex)];
+  const row = rows[0];
+
+  if (!emailMatch && !row) return null;
+
+  return {
+    email: emailMatch ? emailMatch[1].trim() : null,
+    accountName: row ? row[1].trim() : null,
+    accountId: row ? row[2].trim() : null,
+  };
+}
+
+function getWranglerAuthPath() {
+  return detectConfigPath();
+}
+
+function canInspectIdentity(configPath) {
+  return resolvePath(configPath) === resolvePath(getWranglerAuthPath());
+}
+
+function getCurrentIdentity(configPath) {
+  if (!canInspectIdentity(configPath)) {
+    return {
+      identity: null,
+      error: `Identity lookup only works for the active Wrangler auth file: ${getWranglerAuthPath()}`,
+    };
+  }
+
+  const result = spawnSync("wrangler", ["whoami"], {
+    encoding: "utf8",
+  });
+
+  if (result.error) {
+    return {
+      identity: null,
+      error: result.error.message,
+    };
+  }
+
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  if (result.status !== 0) {
+    return {
+      identity: null,
+      error: output.includes("Not logged in") ? "Not logged in" : `wrangler whoami exited with code ${result.status}`,
+    };
+  }
+
+  const identity = parseWranglerWhoamiOutput(output);
+  if (!identity) {
+    return {
+      identity: null,
+      error: "Failed to parse 'wrangler whoami' output",
+    };
+  }
+
+  return {
+    identity,
+    error: null,
+  };
 }
 
 function filesEqual(pathA, pathB) {
@@ -167,7 +274,7 @@ function filesEqual(pathA, pathB) {
   return fileHash(pathA) === fileHash(pathB);
 }
 
-function writeMeta(profileDir, name, sourcePath) {
+function writeMeta(profileDir, name, sourcePath, identity = null) {
   const configPath = path.join(profileDir, "config.toml");
   const stat = fs.statSync(configPath);
   const meta = {
@@ -177,7 +284,34 @@ function writeMeta(profileDir, name, sourcePath) {
     bytes: stat.size,
     sha256: fileHash(configPath),
   };
+  if (identity) {
+    meta.identity = identity;
+  }
   fs.writeFileSync(path.join(profileDir, "meta.json"), JSON.stringify(meta, null, 2));
+}
+
+function readMeta(profileDir) {
+  const metaPath = path.join(profileDir, "meta.json");
+  if (!fs.existsSync(metaPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function getMetaIdentity(meta) {
+  if (!meta || !meta.identity) return null;
+  const { email = null, accountName = null, accountId = null } = meta.identity;
+  if (!email && !accountName && !accountId) return null;
+  return { email, accountName, accountId };
+}
+
+function identitiesMatch(left, right) {
+  if (!left || !right) return false;
+  if (left.accountId && right.accountId) return left.accountId === right.accountId;
+  if (left.email && right.email) return left.email === right.email;
+  return false;
 }
 
 function setActiveProfile(profilesDir, name) {
@@ -215,10 +349,10 @@ function backupCurrentConfig(configPath, profilesDir) {
   return backupName;
 }
 
-function findMatchingProfile(profilesDir, configPath) {
+function findMatchingProfile(profilesDir, configPath, { includeBackups = false } = {}) {
   if (!fs.existsSync(configPath)) return null;
   const configHash = fileHash(configPath);
-  const profiles = listProfiles(profilesDir);
+  const profiles = listProfiles(profilesDir, { includeBackups });
   for (const name of profiles) {
     const profileConfig = path.join(profilesDir, name, "config.toml");
     if (fileHash(profileConfig) === configHash) return name;
@@ -226,7 +360,24 @@ function findMatchingProfile(profilesDir, configPath) {
   return null;
 }
 
-function saveProfile(name, configPath, profilesDir, force) {
+function findProfilesByIdentity(profilesDir, identity, { includeBackups = false } = {}) {
+  if (!identity) return [];
+  const profiles = listProfiles(profilesDir, { includeBackups });
+  return profiles.filter((name) => {
+    const meta = readMeta(path.join(profilesDir, name));
+    return identitiesMatch(identity, getMetaIdentity(meta));
+  });
+}
+
+function describeIdentity(identity) {
+  if (!identity) return "unknown";
+  const parts = [];
+  if (identity.email) parts.push(identity.email);
+  if (identity.accountId) parts.push(identity.accountId);
+  return parts.join(" / ") || "unknown";
+}
+
+function saveProfile(name, configPath, profilesDir, force, identity = null) {
   if (!isValidName(name)) {
     die(`Invalid profile name: ${name}`);
   }
@@ -241,7 +392,7 @@ function saveProfile(name, configPath, profilesDir, force) {
 
   ensureDir(profileDir);
   fs.copyFileSync(configPath, path.join(profileDir, "config.toml"));
-  writeMeta(profileDir, name, configPath);
+  writeMeta(profileDir, name, configPath, identity);
 }
 
 function runWranglerLogin() {
@@ -265,6 +416,13 @@ function useProfile(name, configPath, profilesDir, backup) {
     die(`Profile not found: ${name}`);
   }
 
+  const session = readSessionState(profileConfig);
+  if (session.expired) {
+    die(
+      `Profile '${name}' has expired Wrangler OAuth credentials (expiration_time: ${session.expirationTime}). Run 'wrangler-accounts login ${name}' to refresh it.`
+    );
+  }
+
   let backupName = null;
   if (backup && fs.existsSync(configPath) && !filesEqual(configPath, profileConfig)) {
     backupName = backupCurrentConfig(configPath, profilesDir);
@@ -275,6 +433,45 @@ function useProfile(name, configPath, profilesDir, backup) {
   setActiveProfile(profilesDir, name);
 
   return backupName;
+}
+
+function syncProfile(name, configPath, profilesDir, identity) {
+  if (!isValidName(name)) {
+    die(`Invalid profile name: ${name}`);
+  }
+  if (!fs.existsSync(configPath)) {
+    die(`Config file not found: ${configPath}`);
+  }
+
+  const currentSession = readSessionState(configPath);
+  if (currentSession.expired) {
+    die(
+      `Current Wrangler OAuth credentials have expired (expiration_time: ${currentSession.expirationTime}). Run 'wrangler login' first.`
+    );
+  }
+
+  if (!identity) {
+    die("Unable to identify the current Wrangler account. Make sure 'wrangler whoami' works first.");
+  }
+
+  const profileDir = path.join(profilesDir, name);
+  const profileConfig = path.join(profileDir, "config.toml");
+  if (!fs.existsSync(profileConfig)) {
+    die(`Profile not found: ${name}`);
+  }
+
+  const meta = readMeta(profileDir);
+  const profileIdentity = getMetaIdentity(meta);
+  if (profileIdentity && !identitiesMatch(identity, profileIdentity)) {
+    die(
+      `Current Wrangler account (${describeIdentity(identity)}) does not match profile '${name}' (${describeIdentity(
+        profileIdentity
+      )}).`
+    );
+  }
+
+  fs.copyFileSync(configPath, profileConfig);
+  writeMeta(profileDir, name, configPath, identity);
 }
 
 function removeProfile(name, profilesDir) {
@@ -306,9 +503,17 @@ function main() {
 
   const configPath = detectConfigPath(opts.config);
   const profilesDir = detectProfilesDir(opts.profiles);
+  const includeBackups = opts.includeBackups;
+  let currentIdentityResult = null;
+  function loadCurrentIdentity() {
+    if (currentIdentityResult === null) {
+      currentIdentityResult = getCurrentIdentity(configPath);
+    }
+    return currentIdentityResult;
+  }
 
   if (command === "list") {
-    const profiles = listProfiles(profilesDir);
+    const profiles = listProfiles(profilesDir, { includeBackups });
     if (opts.json) {
       console.log(JSON.stringify(profiles, null, 2));
     } else if (opts.plain) {
@@ -322,37 +527,90 @@ function main() {
   }
 
   if (command === "status") {
-    const profiles = listProfiles(profilesDir);
+    const { identity: currentIdentity, error: currentIdentityError } = loadCurrentIdentity();
+    const profiles = listProfiles(profilesDir, { includeBackups });
     const active = getActiveProfile(profilesDir);
-    const match = findMatchingProfile(profilesDir, configPath);
+    const exactMatch = findMatchingProfile(profilesDir, configPath, { includeBackups });
+    const configSession = readSessionState(configPath);
+    const identityMatches = findProfilesByIdentity(profilesDir, currentIdentity, { includeBackups });
+    const matchingProfile = exactMatch || (identityMatches.length === 1 ? identityMatches[0] : null);
+    const matchType = exactMatch ? "hash" : identityMatches.length === 1 ? "identity" : null;
+    const profileStates = Object.fromEntries(
+      profiles.map((name) => {
+        const profileConfig = path.join(profilesDir, name, "config.toml");
+        const meta = readMeta(path.join(profilesDir, name));
+        return [
+          name,
+          {
+            ...readSessionState(profileConfig),
+            identity: getMetaIdentity(meta),
+          },
+        ];
+      })
+    );
+    const syncAvailable =
+      Boolean(currentIdentity) &&
+      Boolean(matchingProfile) &&
+      !exactMatch &&
+      filesEqual(configPath, path.join(profilesDir, matchingProfile, "config.toml")) === false;
     const payload = {
       configPath,
       configExists: fs.existsSync(configPath),
+      configSession,
+      currentIdentity,
+      currentIdentityError,
       profilesDir,
       profileCount: profiles.length,
       profiles,
+      profileStates,
       activeProfile: active,
-      matchingProfile: match,
+      matchingProfile,
+      matchType,
+      syncAvailable,
     };
 
     if (opts.json) {
       console.log(JSON.stringify(payload, null, 2));
     } else {
       console.log(`Config: ${payload.configPath} (${payload.configExists ? "exists" : "missing"})`);
+      if (payload.configSession.expirationTime) {
+        const state = payload.configSession.expired ? "expired" : "valid";
+        console.log(`Config session: ${payload.configSession.expirationTime} (${state})`);
+      }
+      if (payload.currentIdentity) {
+        console.log(`Config identity: ${describeIdentity(payload.currentIdentity)}`);
+      } else if (payload.currentIdentityError) {
+        console.log(`Config identity: unavailable (${payload.currentIdentityError})`);
+      }
       console.log(`Profiles: ${payload.profilesDir} (${payload.profileCount})`);
       console.log(`Active: ${payload.activeProfile || "-"}`);
-      console.log(`Match: ${payload.matchingProfile || "-"}`);
+      if (payload.matchingProfile && payload.matchType) {
+        console.log(`Match: ${payload.matchingProfile} (${payload.matchType})`);
+      } else {
+        console.log(`Match: -`);
+      }
+      if (payload.syncAvailable) {
+        console.log(`Sync: current config can refresh profile '${payload.matchingProfile}'`);
+      }
+      for (const name of profiles) {
+        const profileSession = profileStates[name];
+        if (!profileSession.expirationTime) continue;
+        const state = profileSession.expired ? "expired" : "valid";
+        const suffix = profileSession.identity ? `, ${describeIdentity(profileSession.identity)}` : "";
+        console.log(`- ${name}: ${profileSession.expirationTime} (${state}${suffix ? suffix : ""})`);
+      }
     }
     return;
   }
 
   if (command === "save") {
+    const { identity: currentIdentity } = loadCurrentIdentity();
     const name = rest[1];
     if (!name) die("Missing profile name for save");
     ensureDir(profilesDir);
     const profileDir = path.join(profilesDir, name);
     const existed = fs.existsSync(profileDir);
-    saveProfile(name, configPath, profilesDir, opts.force);
+    saveProfile(name, configPath, profilesDir, opts.force, currentIdentity);
     if (opts.json) {
       console.log(
         JSON.stringify(
@@ -362,6 +620,7 @@ function main() {
             configPath,
             profilesDir,
             overwritten: existed,
+            identity: currentIdentity,
           },
           null,
           2
@@ -383,7 +642,8 @@ function main() {
     }
     const profileDir = path.join(profilesDir, name);
     const existed = fs.existsSync(profileDir);
-    saveProfile(name, configPath, profilesDir, true);
+    const refreshedIdentityResult = getCurrentIdentity(configPath);
+    saveProfile(name, configPath, profilesDir, true, refreshedIdentityResult.identity);
     const note = existed ? " (overwritten)" : "";
     if (opts.json) {
       console.log(
@@ -394,6 +654,7 @@ function main() {
             configPath,
             profilesDir,
             overwritten: existed,
+            identity: refreshedIdentityResult.identity,
           },
           null,
           2
@@ -401,6 +662,58 @@ function main() {
       );
     } else {
       console.log(`Logged in and saved profile '${name}' from ${configPath}${note}`);
+    }
+    return;
+  }
+
+  if (command === "sync") {
+    const { identity: currentIdentity } = loadCurrentIdentity();
+    const name = rest[1];
+    if (!name) die("Missing profile name for sync");
+    ensureDir(profilesDir);
+    syncProfile(name, configPath, profilesDir, currentIdentity);
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            command: "sync",
+            name,
+            configPath,
+            profilesDir,
+            identity: currentIdentity,
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      console.log(`Synced current Wrangler login into profile '${name}'`);
+    }
+    return;
+  }
+
+  if (command === "sync-active") {
+    const { identity: currentIdentity } = loadCurrentIdentity();
+    const active = getActiveProfile(profilesDir);
+    if (!active) die("No active profile to sync");
+    ensureDir(profilesDir);
+    syncProfile(active, configPath, profilesDir, currentIdentity);
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            command: "sync-active",
+            name: active,
+            configPath,
+            profilesDir,
+            identity: currentIdentity,
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      console.log(`Synced current Wrangler login into active profile '${active}'`);
     }
     return;
   }
