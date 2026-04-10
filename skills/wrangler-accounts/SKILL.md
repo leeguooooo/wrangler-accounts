@@ -265,6 +265,29 @@ The OAuth token is fine but **the URL contains the wrong account ID**. wrangler 
 
 Same root cause as the 7403 above. Default to the same fix path.
 
+### `wrangler dev` (or any `--local` command) shows stale data after switching profiles
+
+Project-local state at `<project>/.wrangler/state/` is **NOT** isolated per profile — wrangler's `getLocalPersistencePath` (cli.js:149025) hardcodes the path next to `wrangler.toml` and the only override is the `--persist-to` CLI flag (no env var hook). So if profile A's `wrangler dev` populated a local D1 emulation, then you switch to profile B and run `wrangler dev` in the same directory, B sees A's emulated rows.
+
+This only affects `--local` simulations. **`--remote` commands hit Cloudflare directly and are unaffected** — that's the common case for d1/r2 work in a multi-account setup.
+
+Two clean fixes:
+
+1. **Use git worktrees** (recommended for any serious multi-profile dev workflow):
+   ```bash
+   git worktree add ../my-project-work main
+   git worktree add ../my-project-personal main
+   cd ../my-project-work && wrangler-accounts exec work     # isolated .wrangler/state/
+   cd ../my-project-personal && wrangler-accounts exec personal
+   ```
+2. **Clear state manually before switching**:
+   ```bash
+   rm -rf .wrangler/state
+   wrangler-accounts --profile <new> dev
+   ```
+
+`wrangler-accounts` does not auto-isolate `.wrangler/state/` because the only mechanism would be argv injection of `--persist-to`, which has too many failure modes (different subcommands accept persistTo at different positions, can't override user-supplied flags, path selection is ambiguous between per-profile and per-profile-per-project). The honest tradeoff is documented in the "What is and isn't isolated" table above — partial isolation with hidden gotchas would be worse than honest sharing.
+
 ### Shell history / `.zsh_history` seems to grow when running `exec`
 
 Intentional. By design the shadow HOME symlinks all top-level entries of real HOME except `.wrangler`, so shell history writes pass through to the real file. This is a **convenience** bias, not a clean-room sandbox — the goal is that `exec` subshells feel like a normal terminal with a different Cloudflare account, not a jail.
