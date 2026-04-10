@@ -1,6 +1,6 @@
 {
   "name": "@leeguoo/wrangler-accounts",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AWS-style multi-account convenience for Cloudflare Wrangler — per-invocation OAuth isolation via shadow HOME.",
   "license": "MIT",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "files": [
     "bin",
+    "lib",
     "completions",
     "skills"
   ],
