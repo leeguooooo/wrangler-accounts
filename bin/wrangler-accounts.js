@@ -616,6 +616,48 @@ function main() {
     return;
   }
 
+  if (command === "default") {
+    const name = rest[1];
+    // --unset takes precedence over any positional value
+    if (opts.unset) {
+      unsetDefaultProfile(profilesDir);
+      if (opts.json) {
+        console.log(JSON.stringify({ command: "default", unset: true }, null, 2));
+      } else {
+        console.log("Default profile unset.");
+      }
+      return;
+    }
+    // No name given — print the current default (or error if none set)
+    if (!name) {
+      const current = getDefaultProfile(profilesDir);
+      if (opts.json) {
+        console.log(JSON.stringify({ command: "default", name: current }, null, 2));
+      } else if (current) {
+        console.log(current);
+      } else {
+        if (outputJson) {
+          // handled above
+        } else {
+          console.log("(no default set)");
+        }
+        process.exit(1);
+      }
+      return;
+    }
+    // Set the default profile
+    if (!isValidName(name)) die(`Invalid profile name: ${name}`);
+    const cfg = path.join(profilesDir, name, "config.toml");
+    if (!fs.existsSync(cfg)) die(`Profile not found: ${name}`, 2);
+    setDefaultProfile(profilesDir, name);
+    if (opts.json) {
+      console.log(JSON.stringify({ command: "default", name }, null, 2));
+    } else {
+      console.log(`Default profile set to '${name}'`);
+    }
+    return;
+  }
+
   die(`Unknown command: ${command}`);
 }
 
