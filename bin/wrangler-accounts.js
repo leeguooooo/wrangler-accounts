@@ -45,6 +45,36 @@ const {
   describeIdentity,
   findProfilesByIdentity,
 } = require("../lib/identity");
+const { resolveProfile, ResolveError } = require("../lib/resolve");
+const { runIsolated } = require("../lib/isolation");
+
+const MANAGEMENT_SUBCOMMANDS = new Set([
+  "list",
+  "status",
+  "save",
+  "sync",
+  "sync-active",
+  "sync-default",
+  "login",
+  "remove",
+  "default",
+  "whoami",
+  "gc",
+  "use",
+  "exec",
+]);
+
+function findCloudflared() {
+  const dirs = (process.env.PATH || "").split(path.delimiter);
+  for (const d of dirs) {
+    if (!d) continue;
+    const candidate = path.join(d, "cloudflared");
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {}
+  }
+  return null;
+}
 
 // Thin wrappers that turn thrown errors into die() calls, so the lib
 // functions remain pure / testable without depending on process.exit.
@@ -117,8 +147,21 @@ function parseArgs(argv) {
     includeBackups: false,
   };
   const rest = [];
+  let sawFirstNonFlag = false;
+  let sawManagementSubcommand = false;
+
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
+
+    // Once we've seen the first non-flag token AND it was NOT a management
+    // subcommand, stop parsing our flags — everything from here is
+    // forwarded to wrangler verbatim (including wrangler's own --env,
+    // --json, etc.).
+    if (sawFirstNonFlag && !sawManagementSubcommand) {
+      rest.push(arg);
+      continue;
+    }
+
     if (arg === "--help" || arg === "-h") {
       opts.help = true;
     } else if (arg === "--json") {
@@ -133,15 +176,35 @@ function parseArgs(argv) {
       opts.backup = true;
     } else if (arg === "--no-backup") {
       opts.backup = false;
+    } else if (arg === "--unset") {
+      opts.unset = true;
     } else if (arg === "--config" || arg === "-c") {
       opts.config = argv[i + 1];
       if (!opts.config) die("Missing value for --config");
       i += 1;
-    } else if (arg === "--profiles" || arg === "-p") {
+    } else if (arg === "--profile" || arg === "-p") {
+      // NOTE: -p now means --profile (v1.0 breaking change vs 0.1.x,
+      // where -p meant --profiles). Use --profiles long form for the
+      // profiles directory path.
+      opts.profile = argv[i + 1];
+      if (!opts.profile) die("Missing value for --profile");
+      i += 1;
+    } else if (arg === "--profiles") {
       opts.profiles = argv[i + 1];
       if (!opts.profiles) die("Missing value for --profiles");
       i += 1;
+    } else if (arg === "--older-than") {
+      opts.olderThan = argv[i + 1];
+      if (!opts.olderThan) die("Missing value for --older-than");
+      i += 1;
     } else {
+      // Non-flag token.
+      if (!sawFirstNonFlag) {
+        sawFirstNonFlag = true;
+        if (MANAGEMENT_SUBCOMMANDS.has(arg)) {
+          sawManagementSubcommand = true;
+        }
+      }
       rest.push(arg);
     }
   }
@@ -245,6 +308,58 @@ function main() {
       currentIdentityResult = getCurrentIdentity(configPath);
     }
     return currentIdentityResult;
+  }
+
+  // Per-invocation isolated execution path.
+  // If the first positional token is NOT a management subcommand, treat
+  // the rest of argv as wrangler arguments and run them inside a shadow
+  // HOME for the resolved profile.
+  if (!MANAGEMENT_SUBCOMMANDS.has(command)) {
+    const profileArg = opts.profile || null;
+    // Positional shorthand: `wrangler-accounts work deploy` — if `work` is
+    // an existing profile, use it and forward `deploy` to wrangler.
+    const positional = command;
+
+    let resolved;
+    try {
+      resolved = resolveProfile({
+        cliProfile: profileArg,
+        positional,
+        env: process.env,
+        profilesDir,
+        managementSubcommands: MANAGEMENT_SUBCOMMANDS,
+      });
+    } catch (err) {
+      if (err instanceof ResolveError) {
+        const exitCode =
+          err.code === "NO_PROFILE" || err.code === "PROFILE_NOT_FOUND" ? 2 : 1;
+        die(err.message, exitCode);
+      }
+      throw err;
+    }
+
+    const profileCfg = path.join(profilesDir, resolved.name, "config.toml");
+    const session = readSessionState(profileCfg);
+    if (session.expired) {
+      die(
+        `Profile '${resolved.name}' has expired Wrangler OAuth credentials (expiration_time: ${session.expirationTime}). Run 'wrangler-accounts login ${resolved.name}' to refresh it.`,
+        3
+      );
+    }
+
+    // If positional was consumed as profile, drop it from wrangler argv
+    const wranglerArgs = resolved.source === "positional" ? rest.slice(1) : rest;
+
+    const result = runIsolated({
+      profile: resolved.name,
+      profileCfg,
+      realHome: os.homedir(),
+      command: "wrangler",
+      args: wranglerArgs,
+      baseEnv: process.env,
+      cloudflaredPath: findCloudflared(),
+    });
+    process.exit(result.exitCode);
   }
 
   if (command === "list") {
