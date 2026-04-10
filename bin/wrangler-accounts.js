@@ -408,15 +408,66 @@ function main() {
 
   if (command === "list") {
     const profiles = listProfiles(profilesDir, { includeBackups });
-    if (opts.json) {
-      console.log(JSON.stringify(profiles, null, 2));
-    } else if (opts.plain) {
-      if (profiles.length) console.log(profiles.join("\n"));
-    } else if (profiles.length === 0) {
-      console.log("No profiles found.");
-    } else {
-      console.log(profiles.join("\n"));
+    const defaultName = getDefaultProfile(profilesDir);
+    const activeName = getActiveProfile(profilesDir);
+
+    const entries = profiles.map((name) => {
+      const profileDir = path.join(profilesDir, name);
+      const cfgPath = path.join(profileDir, "config.toml");
+      const session = readSessionState(cfgPath);
+      const meta = readMeta(profileDir);
+      const identity = getMetaIdentity(meta);
+      let status;
+      if (session.expired === true) status = "expired";
+      else if (session.expired === false) status = "valid";
+      else status = "unknown";
+      return {
+        name,
+        isDefault: name === defaultName,
+        isActive: name === activeName,
+        status,
+        expirationTime: session.expirationTime,
+        identity,
+      };
+    });
+
+    if (opts.plain) {
+      // --plain keeps the v1.0 contract: one name per line, scriptable.
+      if (entries.length) console.log(entries.map((e) => e.name).join("\n"));
+      return;
     }
+
+    if (opts.json) {
+      console.log(JSON.stringify(entries, null, 2));
+      return;
+    }
+
+    // Text output: human-friendly table with status markers.
+    if (entries.length === 0) {
+      console.log("No profiles found.");
+      return;
+    }
+    if (defaultName) console.log(`Default: ${defaultName}\n`);
+    const nameW = Math.max(4, ...entries.map((e) => e.name.length));
+    const statusW = 8; // fits 'expired', 'valid', 'unknown'
+    const header = `  ${"NAME".padEnd(nameW)}  ${"STATUS".padEnd(statusW)}  IDENTITY`;
+    console.log(header);
+    for (const e of entries) {
+      const marker = e.isDefault ? "*" : " ";
+      const statusLabel =
+        e.status === "expired" ? "EXPIRED"
+        : e.status === "valid" ? "valid"
+        : "unknown";
+      const idStr = e.identity ? describeIdentity(e.identity) : "(no identity)";
+      const exp = e.expirationTime ? ` (${e.expirationTime})` : "";
+      console.log(
+        `${marker} ${e.name.padEnd(nameW)}  ${statusLabel.padEnd(statusW)}  ${idStr}${e.status === "expired" ? exp : ""}`,
+      );
+    }
+    console.log();
+    console.log(
+      `Legend: * = default profile, EXPIRED = OAuth session needs 'wrangler-accounts login <name>'`,
+    );
     return;
   }
 

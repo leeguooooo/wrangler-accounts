@@ -64,7 +64,16 @@ test('list --json: management subcommand parses --json after the subcommand', ()
   });
   assert.equal(r.status, 0);
   const list = JSON.parse(r.stdout);
-  assert.deepEqual(list.sort(), ['personal', 'work']);
+  assert.equal(list.length, 2);
+  const names = list.map((e) => e.name).sort();
+  assert.deepEqual(names, ['personal', 'work']);
+  // each entry should have the enriched shape
+  for (const entry of list) {
+    assert.ok('status' in entry);
+    assert.ok('isDefault' in entry);
+    assert.ok('identity' in entry);
+    assert.ok('expirationTime' in entry);
+  }
 });
 
 test('positional shorthand: wrangler-accounts work deploy forwards deploy only', () => {
