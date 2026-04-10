@@ -80,6 +80,12 @@ function findCloudflared() {
   return null;
 }
 
+function warnDeprecated(oldName, replacement) {
+  process.stderr.write(
+    `[wrangler-accounts] '${oldName}' is deprecated. Use '${replacement}' instead. See README for details.\n`,
+  );
+}
+
 // Parse a short duration string like "1h", "30m", "7d", "90s" into ms.
 function parseDuration(s) {
   const m = String(s).trim().match(/^(\d+)\s*([smhd])?$/);
@@ -628,18 +634,26 @@ function main() {
     return;
   }
 
-  if (command === "sync-active") {
+  if (command === "sync-active" || command === "sync-default") {
+    const isLegacyAlias = command === "sync-active";
+    if (isLegacyAlias) {
+      warnDeprecated("sync-active", "sync-default");
+    }
     const { identity: currentIdentity } = loadCurrentIdentity();
-    const active = getActiveProfile(profilesDir);
-    if (!active) die("No active profile to sync");
+    // Prefer the new persistent default; fall back to legacy active for
+    // backward compatibility during the transition.
+    const target = getDefaultProfile(profilesDir) || getActiveProfile(profilesDir);
+    if (!target) {
+      die("No default profile set. Run `wrangler-accounts default <name>` first.", 2);
+    }
     ensureDir(profilesDir);
-    syncProfile(active, configPath, profilesDir, currentIdentity);
+    syncProfile(target, configPath, profilesDir, currentIdentity);
     if (opts.json) {
       console.log(
         JSON.stringify(
           {
-            command: "sync-active",
-            name: active,
+            command: isLegacyAlias ? "sync-active" : "sync-default",
+            name: target,
             configPath,
             profilesDir,
             identity: currentIdentity,
@@ -649,12 +663,16 @@ function main() {
         )
       );
     } else {
-      console.log(`Synced current Wrangler login into active profile '${active}'`);
+      console.log(`Synced current Wrangler login into default profile '${target}'`);
     }
     return;
   }
 
   if (command === "use") {
+    warnDeprecated(
+      "use",
+      "default <name> (for persistence) or --profile <name> (for one-shot)",
+    );
     const name = rest[1];
     if (!name) die("Missing profile name for use");
     ensureDir(profilesDir);
