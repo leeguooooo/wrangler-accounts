@@ -236,6 +236,8 @@ function parseArgs(argv) {
       opts.backup = false;
     } else if (arg === "--unset") {
       opts.unset = true;
+    } else if (arg === "--deep" || arg === "--verify") {
+      opts.deep = true;
     } else if (arg === "--config" || arg === "-c") {
       opts.config = argv[i + 1];
       if (!opts.config) die("Missing value for --config");
@@ -451,8 +453,58 @@ function main() {
         status,
         expirationTime: session.expirationTime,
         identity,
+        verified: null,
+        verifyError: null,
       };
     });
+
+    // --deep: actually run `wrangler whoami` inside a shadow HOME for
+    // each profile. This is the only authoritative check — the fast
+    // status column above is derived purely from the saved
+    // expiration_time, which does not tell us whether the refresh token
+    // still works or whether Cloudflare has revoked the session.
+    if (opts.deep) {
+      if (entries.length > 0 && !opts.json) {
+        process.stderr.write(
+          `[wrangler-accounts] running deep check (wrangler whoami) for ${entries.length} profile(s)...\n`,
+        );
+      }
+      const cloudflaredPath = findCloudflared();
+      for (const e of entries) {
+        const profileCfg = path.join(profilesDir, e.name, "config.toml");
+        try {
+          const r = runIsolated({
+            profile: e.name,
+            profileCfg,
+            realHome: os.homedir(),
+            command: "wrangler",
+            args: ["whoami"],
+            baseEnv: process.env,
+            captureStdout: true,
+            cloudflaredPath,
+          });
+          const output = `${r.stdout || ""}\n${r.stderr || ""}`;
+          if (r.exitCode === 0) {
+            const live = parseWranglerWhoamiOutput(output);
+            if (live) {
+              e.verified = true;
+              e.liveIdentity = live;
+            } else {
+              e.verified = false;
+              e.verifyError = "could not parse wrangler whoami output";
+            }
+          } else {
+            e.verified = false;
+            e.verifyError = /not logged in/i.test(output)
+              ? "not logged in (refresh token may be revoked)"
+              : `wrangler whoami exit ${r.exitCode}`;
+          }
+        } catch (err) {
+          e.verified = false;
+          e.verifyError = err.message;
+        }
+      }
+    }
 
     if (opts.plain) {
       // --plain keeps the v1.0 contract: one name per line, scriptable.
@@ -479,22 +531,51 @@ function main() {
         : e.status === "valid" ? "valid"
         : "unknown",
       expires: formatExpiry(e.expirationTime),
+      verified:
+        e.verified === true ? "✓ ok"
+        : e.verified === false ? `✗ ${e.verifyError || "failed"}`
+        : "—",
       identity: e.identity ? describeIdentity(e.identity) : "(no identity)",
     }));
     const nameW = Math.max(4, ...rows.map((r) => r.name.length));
     const statusW = Math.max(6, ...rows.map((r) => r.status.length));
     const expiresW = Math.max(7, ...rows.map((r) => r.expires.length));
-    const header = `  ${"NAME".padEnd(nameW)}  ${"STATUS".padEnd(statusW)}  ${"EXPIRES".padEnd(expiresW)}  IDENTITY`;
+    const verifiedW = Math.max(8, ...rows.map((r) => r.verified.length));
+
+    let header;
+    if (opts.deep) {
+      header = `  ${"NAME".padEnd(nameW)}  ${"STATUS".padEnd(statusW)}  ${"EXPIRES".padEnd(expiresW)}  ${"VERIFIED".padEnd(verifiedW)}  IDENTITY`;
+    } else {
+      header = `  ${"NAME".padEnd(nameW)}  ${"STATUS".padEnd(statusW)}  ${"EXPIRES".padEnd(expiresW)}  IDENTITY`;
+    }
     console.log(header);
     for (const r of rows) {
-      console.log(
-        `${r.marker} ${r.name.padEnd(nameW)}  ${r.status.padEnd(statusW)}  ${r.expires.padEnd(expiresW)}  ${r.identity}`,
-      );
+      if (opts.deep) {
+        console.log(
+          `${r.marker} ${r.name.padEnd(nameW)}  ${r.status.padEnd(statusW)}  ${r.expires.padEnd(expiresW)}  ${r.verified.padEnd(verifiedW)}  ${r.identity}`,
+        );
+      } else {
+        console.log(
+          `${r.marker} ${r.name.padEnd(nameW)}  ${r.status.padEnd(statusW)}  ${r.expires.padEnd(expiresW)}  ${r.identity}`,
+        );
+      }
     }
     console.log();
-    console.log(
-      `Legend: * = default profile, EXPIRED = OAuth session needs 'wrangler-accounts login <name>'`,
-    );
+    if (opts.deep) {
+      console.log(
+        "Legend: * = default profile, VERIFIED ✓ = wrangler whoami succeeded in shadow HOME, ✗ = authoritative failure",
+      );
+    } else {
+      console.log(
+        "Legend: * = default profile, EXPIRED = access token past expiration_time (wrangler may still auto-refresh)",
+      );
+      console.log(
+        "        STATUS is derived from the saved file only. For a live check that runs 'wrangler whoami' against Cloudflare,",
+      );
+      console.log(
+        "        pass --deep (slower, makes network calls).",
+      );
+    }
     return;
   }
 

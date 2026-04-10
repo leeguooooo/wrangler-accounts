@@ -76,9 +76,14 @@ Use `--json` for structured output.
 
 ### List and inspect profiles
 
-- `wrangler-accounts list` / `list --json` / `list --plain`
+- `wrangler-accounts list` — text table with NAME / STATUS / EXPIRES / IDENTITY columns
+- `wrangler-accounts list --json` — structured: array of `{name, isDefault, isActive, status, expirationTime, identity}`
+- `wrangler-accounts list --plain` — one profile name per line (scriptable)
+- `wrangler-accounts list --deep` — **authoritative** check: spawns `wrangler whoami` in a shadow HOME for every profile and reports whether Cloudflare actually accepts the credentials. Slower (makes network calls), but the only way to catch revoked refresh tokens or broken profile files.
 - `wrangler-accounts status` / `status --json`
 - Pass `--include-backups` to show hidden backup profiles.
+
+**Accuracy note:** the `STATUS` column without `--deep` is derived purely from the saved `expiration_time` and tells you *when the access token will expire*, not whether the profile is actually usable. Wrangler auto-refreshes access tokens via the refresh token, so an `EXPIRED` access token is often fine in practice. When the user needs a real verdict, suggest `wrangler-accounts list --deep`.
 
 ### Save, sync, login, remove
 

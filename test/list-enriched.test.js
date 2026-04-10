@@ -122,3 +122,107 @@ test('list text on empty dir still says "No profiles found."', () => {
   assert.equal(r.status, 0);
   assert.match(r.stdout, /No profiles found\./);
 });
+
+// --deep tests use a fake wrangler on PATH so they don't hit real Cloudflare
+function setupDeepShim({ failForName = null } = {}) {
+  const shim = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-deep-shim-'));
+  const fakeWrangler = path.join(shim, 'wrangler');
+  // The fake reads its profile name from a marker file in $HOME/.wrangler/config/default.toml
+  // and returns "not logged in" for the name listed in $WA_FAIL_PROFILE, otherwise success.
+  fs.writeFileSync(fakeWrangler, `#!/bin/sh
+case "$1" in
+  whoami)
+    cfg="$HOME/.wrangler/config/default.toml"
+    if [ ! -f "$cfg" ]; then
+      echo "Not logged in" >&2
+      exit 1
+    fi
+    # read the marker token to identify the profile
+    token=$(grep -o 'oauth_token = "[^"]*"' "$cfg" | sed 's/oauth_token = "//;s/"$//')
+    if [ "\${WA_FAIL_PROFILE:-}" = "$token" ]; then
+      echo "Not logged in" >&2
+      exit 1
+    fi
+    cat <<EOF
+ ⛅️ wrangler 4.79.0
+👋 You are logged in with an OAuth Token, associated with the email $token@example.com.
+┌───────────┬──────────────────────────────────┐
+│ $token Acct │ 0123456789abcdef0123456789abcdef │
+└───────────┴──────────────────────────────────┘
+EOF
+    exit 0
+    ;;
+  *)
+    echo "fake wrangler: unknown $1" >&2
+    exit 1
+    ;;
+esac
+`);
+  fs.chmodSync(fakeWrangler, 0o755);
+  return shim;
+}
+
+test('list --deep reports ✓ ok for profiles whose wrangler whoami succeeds', () => {
+  const dir = mkStore();
+  addProfile(dir, 'work');
+  // Override the token in config.toml to be the profile name so the fake shim can identify it
+  fs.writeFileSync(
+    path.join(dir, 'work', 'config.toml'),
+    `oauth_token = "work"\nexpiration_time = "2099-01-01T00:00:00.000Z"\n`,
+  );
+  const shim = setupDeepShim();
+  const env = {
+    ...process.env,
+    WRANGLER_ACCOUNTS_DIR: dir,
+    PATH: `${shim}${path.delimiter}${process.env.PATH}`,
+  };
+  const r = spawnSync(process.execPath, [CLI, 'list', '--deep'], { encoding: 'utf8', env });
+  assert.equal(r.status, 0, `stderr=${r.stderr}`);
+  assert.match(r.stdout, /VERIFIED/);
+  // check only the table body (line containing the profile name), not the legend
+  const profileRow = r.stdout.split('\n').find((line) => /\bwork\b/.test(line) && !/Legend/.test(line));
+  assert.ok(profileRow, `profile row not found in:\n${r.stdout}`);
+  assert.match(profileRow, /✓ ok/);
+  assert.doesNotMatch(profileRow, /✗/);
+});
+
+test('list --deep reports ✗ for profiles whose wrangler whoami fails', () => {
+  const dir = mkStore();
+  addProfile(dir, 'broken');
+  fs.writeFileSync(
+    path.join(dir, 'broken', 'config.toml'),
+    `oauth_token = "broken"\nexpiration_time = "2099-01-01T00:00:00.000Z"\n`,
+  );
+  const shim = setupDeepShim();
+  const env = {
+    ...process.env,
+    WRANGLER_ACCOUNTS_DIR: dir,
+    PATH: `${shim}${path.delimiter}${process.env.PATH}`,
+    WA_FAIL_PROFILE: 'broken',
+  };
+  const r = spawnSync(process.execPath, [CLI, 'list', '--deep'], { encoding: 'utf8', env });
+  assert.equal(r.status, 0, `stderr=${r.stderr}`);
+  assert.match(r.stdout, /✗ not logged in/i);
+});
+
+test('list --deep --json includes verified and verifyError fields', () => {
+  const dir = mkStore();
+  addProfile(dir, 'work');
+  fs.writeFileSync(
+    path.join(dir, 'work', 'config.toml'),
+    `oauth_token = "work"\nexpiration_time = "2099-01-01T00:00:00.000Z"\n`,
+  );
+  const shim = setupDeepShim();
+  const env = {
+    ...process.env,
+    WRANGLER_ACCOUNTS_DIR: dir,
+    PATH: `${shim}${path.delimiter}${process.env.PATH}`,
+  };
+  const r = spawnSync(process.execPath, [CLI, 'list', '--deep', '--json'], { encoding: 'utf8', env });
+  assert.equal(r.status, 0, `stderr=${r.stderr}`);
+  const entries = JSON.parse(r.stdout);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].verified, true);
+  assert.equal(entries[0].verifyError, null);
+  assert.ok(entries[0].liveIdentity);
+});
