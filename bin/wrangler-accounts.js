@@ -153,6 +153,18 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
 
+    // POSIX: `--` ends flag parsing. Everything after is a positional,
+    // including `-c` / `--profile` etc. This is critical for `exec`:
+    // `wrangler-accounts exec work -- sh -c "echo $X"` must not have -c
+    // consumed as --config.
+    if (arg === "--") {
+      rest.push(arg);
+      for (let j = i + 1; j < argv.length; j += 1) {
+        rest.push(argv[j]);
+      }
+      return { opts, rest };
+    }
+
     // Once we've seen the first non-flag token AND it was NOT a management
     // subcommand, stop parsing our flags — everything from here is
     // forwarded to wrangler verbatim (including wrangler's own --env,
@@ -614,6 +626,58 @@ function main() {
       console.log(`Removed profile '${name}'`);
     }
     return;
+  }
+
+  if (command === "exec") {
+    const profileName = rest[1];
+    if (!profileName) die("Missing profile name for exec", 2);
+
+    let resolved;
+    try {
+      resolved = resolveProfile({
+        cliProfile: profileName,
+        positional: null,
+        env: process.env,
+        profilesDir,
+        managementSubcommands: MANAGEMENT_SUBCOMMANDS,
+      });
+    } catch (err) {
+      if (err instanceof ResolveError) die(err.message, 2);
+      throw err;
+    }
+
+    const profileCfg = path.join(profilesDir, resolved.name, "config.toml");
+    const session = readSessionState(profileCfg);
+    if (session.expired) {
+      die(
+        `Profile '${resolved.name}' has expired Wrangler OAuth credentials. Run 'wrangler-accounts login ${resolved.name}' to refresh it.`,
+        3
+      );
+    }
+
+    // Everything after `--` is the user command. Without `--`, launch $SHELL -i.
+    const dashDashIdx = rest.indexOf("--", 2);
+    let cmd;
+    let cmdArgs;
+    if (dashDashIdx >= 0) {
+      cmd = rest[dashDashIdx + 1];
+      cmdArgs = rest.slice(dashDashIdx + 2);
+      if (!cmd) die("No command given after --", 1);
+    } else {
+      cmd = process.env.SHELL || "/bin/sh";
+      cmdArgs = ["-i"];
+    }
+
+    const result = runIsolated({
+      profile: resolved.name,
+      profileCfg,
+      realHome: os.homedir(),
+      command: cmd,
+      args: cmdArgs,
+      baseEnv: process.env,
+      cloudflaredPath: findCloudflared(),
+    });
+    process.exit(result.exitCode);
   }
 
   if (command === "default") {
