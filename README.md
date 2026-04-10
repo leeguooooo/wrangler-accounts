@@ -26,29 +26,39 @@ Every execution runs `wrangler` inside a per-invocation **shadow HOME** — a te
 
 ## Install
 
+You need **two** things to get the full experience — the CLI binary (what actually runs) and the AI agent skill (what teaches your AI coding agent how to use it). Install both:
+
 ```bash
+# 1. The CLI (always required)
 npm i -g @leeguoo/wrangler-accounts
+
+# 2. The AI agent skill (recommended if you use Claude Code / Cursor / Codex / etc.)
+npx skills add leeguooooo/wrangler-accounts -g -y
 ```
 
-## Install as an AI agent skill
+The CLI works standalone — you can skip step 2 if you don't use an AI coding agent. The skill is just markdown documentation the AI reads; it cannot run anything without the CLI installed.
 
-This repo ships an Agent Skill (`skills/wrangler-accounts/SKILL.md`) that teaches AI coding agents — Claude Code, Cursor, Codex, Gemini CLI, OpenCode, and 40+ others — how to use `wrangler-accounts` and wrangler effectively: multi-account deploy recipes, troubleshooting common errors, CI guidance, and the invariants AI can rely on.
+### Why two steps?
 
-Install it with [skills.sh](https://skills.sh):
+| | Installs | For |
+|---|---|---|
+| `npm i -g @leeguoo/wrangler-accounts` | The `wrangler-accounts` executable onto your `PATH` | Your shell |
+| `npx skills add leeguooooo/wrangler-accounts` | `SKILL.md` (markdown) into your AI agent's skills directory | Your AI agent to read |
+
+The AI will tell you to run commands like `wrangler-accounts --profile work deploy`; without step 1 those commands fail with "command not found".
+
+### AI agent skill — more options
+
+The repo ships an Agent Skill (`skills/wrangler-accounts/SKILL.md`) with multi-account deploy recipes, troubleshooting, CI guidance, and invariants AI can rely on. [skills.sh](https://skills.sh)'s CLI auto-detects which agent you use (Claude Code, Cursor, Codex, Gemini CLI, OpenCode, and 40+ others) and installs to the right directory.
 
 ```bash
-npx skills add leeguooooo/wrangler-accounts
-```
-
-The `skills` CLI auto-detects which agent you use and installs to the right directory (e.g. `.claude/skills/` for Claude Code, `.cursor/skills/` for Cursor). Pass `-g` for user-global installation, or `-y` for non-interactive use in setup scripts.
-
-```bash
-npx skills add leeguooooo/wrangler-accounts -g -y        # global, non-interactive
-npx skills add leeguooooo/wrangler-accounts -a claude-code cursor   # specific agents
+npx skills add leeguooooo/wrangler-accounts -g -y        # user-global, non-interactive
+npx skills add leeguooooo/wrangler-accounts              # project-scoped, interactive
+npx skills add leeguooooo/wrangler-accounts -a claude-code cursor   # specific agents only
 npx skills add leeguooooo/wrangler-accounts --list       # preview without installing
 ```
 
-After installation, ask your AI agent something like "deploy my worker to the work account" or "set up a new Cloudflare profile" and the skill will guide it through the right commands.
+After both are installed, ask your AI agent something like "deploy my worker to the work account" or "set up a new Cloudflare profile" and the skill will guide it through the right commands.
 
 ## Usage
 

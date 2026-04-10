@@ -9,6 +9,26 @@ description: AWS-style multi-account convenience for Cloudflare Wrangler. Use wh
 
 `wrangler-accounts` runs `wrangler` under per-invocation **shadow HOME** isolation, so multiple shells can use different Cloudflare accounts in parallel without any global switching. Profile resolution order: `--profile` / `-p` > positional shorthand > `$WRANGLER_PROFILE` > `profilesDir/default` > hard error.
 
+## Prerequisites (check before running any recipe below)
+
+This skill is only documentation — the actual `wrangler-accounts` binary must also be installed on the user's `PATH`. Before running any command below, verify:
+
+```bash
+command -v wrangler-accounts
+```
+
+If the command is missing, tell the user to install the CLI first:
+
+```bash
+npm i -g @leeguoo/wrangler-accounts
+```
+
+`wrangler` itself (the Cloudflare CLI) must also be on `PATH`. If missing:
+
+```bash
+npm i -g wrangler
+```
+
 ## Quick Start
 
 - `wrangler-accounts login <name>` — interactive OAuth login into a new profile (never touches real `~/.wrangler`)
