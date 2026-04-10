@@ -80,6 +80,16 @@ function findCloudflared() {
   return null;
 }
 
+// Parse a short duration string like "1h", "30m", "7d", "90s" into ms.
+function parseDuration(s) {
+  const m = String(s).trim().match(/^(\d+)\s*([smhd])?$/);
+  if (!m) throw new Error(`Invalid duration: ${s}`);
+  const n = parseInt(m[1], 10);
+  const unit = m[2] || "s";
+  const mult = { s: 1000, m: 60000, h: 3600000, d: 86400000 }[unit];
+  return n * mult;
+}
+
 // Thin wrappers that turn thrown errors into die() calls, so the lib
 // functions remain pure / testable without depending on process.exit.
 function saveProfile(...args) {
@@ -688,6 +698,82 @@ function main() {
       );
     } else {
       console.log(`Removed profile '${name}'`);
+    }
+    return;
+  }
+
+  if (command === "whoami") {
+    const profileArg = opts.profile || rest[1] || null;
+    let resolved;
+    try {
+      resolved = resolveProfile({
+        cliProfile: profileArg,
+        positional: null,
+        env: process.env,
+        profilesDir,
+        managementSubcommands: MANAGEMENT_SUBCOMMANDS,
+      });
+    } catch (err) {
+      if (err instanceof ResolveError) die(err.message, 2);
+      throw err;
+    }
+    const profileDir = path.join(profilesDir, resolved.name);
+    const meta = readMeta(profileDir);
+    const identity = getMetaIdentity(meta);
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            command: "whoami",
+            profile: resolved.name,
+            source: resolved.source,
+            identity,
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      const idStr = identity ? describeIdentity(identity) : "identity unknown";
+      console.log(`${resolved.name} [${resolved.source}]: ${idStr}`);
+    }
+    return;
+  }
+
+  if (command === "gc") {
+    const thresholdMs = parseDuration(opts.olderThan || "1h");
+    const now = Date.now();
+    const tmpDir = os.tmpdir();
+    let entries;
+    try {
+      entries = fs.readdirSync(tmpDir);
+    } catch {
+      entries = [];
+    }
+    const removed = [];
+    for (const entry of entries) {
+      if (!entry.startsWith("wa-")) continue;
+      const full = path.join(tmpDir, entry);
+      let stat;
+      try {
+        stat = fs.statSync(full);
+      } catch {
+        continue;
+      }
+      if (!stat.isDirectory()) continue;
+      if (now - stat.mtimeMs > thresholdMs) {
+        try {
+          fs.rmSync(full, { recursive: true, force: true });
+          removed.push(full);
+        } catch {}
+      }
+    }
+    if (opts.json) {
+      console.log(JSON.stringify({ command: "gc", removed }, null, 2));
+    } else if (removed.length === 0) {
+      console.log("nothing to clean");
+    } else {
+      for (const r of removed) console.log(`removed ${r}`);
     }
     return;
   }
