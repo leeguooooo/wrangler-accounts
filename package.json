@@ -34,7 +34,9 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "verify-package": "node scripts/verify-package.js",
+    "prepublishOnly": "npm test && npm run verify-package"
   },
   "engines": {
     "node": ">=16"
