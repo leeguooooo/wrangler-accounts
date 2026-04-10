@@ -13,6 +13,39 @@ const {
   detectConfigPath,
   detectProfilesDir,
 } = require("../lib/paths");
+const {
+  ensureDir,
+  isValidName,
+  isBackupName,
+  listProfiles,
+  fileHash,
+  readExpirationTime,
+  readSessionState,
+  filesEqual,
+  writeMeta,
+  readMeta,
+  setActiveProfile,
+  getActiveProfile,
+  getDefaultProfile,
+  setDefaultProfile,
+  unsetDefaultProfile,
+  timestampForFile,
+  backupCurrentConfig,
+  findMatchingProfile,
+  saveProfile: saveProfileImpl,
+  removeProfile: removeProfileImpl,
+} = require("../lib/profile-store");
+
+// Thin wrappers that turn thrown errors into die() calls, so the lib
+// functions remain pure / testable without depending on process.exit.
+function saveProfile(...args) {
+  try { return saveProfileImpl(...args); }
+  catch (err) { die(err.message); }
+}
+function removeProfile(...args) {
+  try { return removeProfileImpl(...args); }
+  catch (err) { die(err.message); }
+}
 
 let outputJson = false;
 
@@ -105,64 +138,6 @@ function parseArgs(argv) {
   return { opts, rest };
 }
 
-function ensureDir(dirPath) {
-  fs.mkdirSync(dirPath, { recursive: true });
-}
-
-function isValidName(name) {
-  return /^[A-Za-z0-9._-]+$/.test(name);
-}
-
-function isBackupName(name) {
-  return name.startsWith("__backup-");
-}
-
-function listProfiles(profilesDir, { includeBackups = false } = {}) {
-  if (!fs.existsSync(profilesDir)) return [];
-  const entries = fs.readdirSync(profilesDir, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .filter((name) => includeBackups || !isBackupName(name))
-    .filter((name) => fs.existsSync(path.join(profilesDir, name, "config.toml")))
-    .sort();
-}
-
-function fileHash(filePath) {
-  const data = fs.readFileSync(filePath);
-  return crypto.createHash("sha256").update(data).digest("hex");
-}
-
-function readExpirationTime(filePath) {
-  if (!fs.existsSync(filePath)) return null;
-  const text = fs.readFileSync(filePath, "utf8");
-  const match = text.match(/^\s*expiration_time\s*=\s*"([^"]+)"/m);
-  return match ? match[1] : null;
-}
-
-function readSessionState(filePath) {
-  const expirationTime = readExpirationTime(filePath);
-  if (!expirationTime) {
-    return {
-      expirationTime: null,
-      expired: null,
-    };
-  }
-
-  const expiresAt = new Date(expirationTime);
-  if (Number.isNaN(expiresAt.getTime())) {
-    return {
-      expirationTime,
-      expired: null,
-    };
-  }
-
-  return {
-    expirationTime,
-    expired: expiresAt.getTime() <= Date.now(),
-  };
-}
-
 function parseWranglerWhoamiOutput(output) {
   const text = output || "";
   const emailMatch = text.match(/associated with the email ([^\n]+?)\.\s*$/m);
@@ -228,40 +203,6 @@ function getCurrentIdentity(configPath) {
   };
 }
 
-function filesEqual(pathA, pathB) {
-  if (!fs.existsSync(pathA) || !fs.existsSync(pathB)) return false;
-  const statA = fs.statSync(pathA);
-  const statB = fs.statSync(pathB);
-  if (statA.size !== statB.size) return false;
-  return fileHash(pathA) === fileHash(pathB);
-}
-
-function writeMeta(profileDir, name, sourcePath, identity = null) {
-  const configPath = path.join(profileDir, "config.toml");
-  const stat = fs.statSync(configPath);
-  const meta = {
-    name,
-    savedAt: new Date().toISOString(),
-    sourcePath,
-    bytes: stat.size,
-    sha256: fileHash(configPath),
-  };
-  if (identity) {
-    meta.identity = identity;
-  }
-  fs.writeFileSync(path.join(profileDir, "meta.json"), JSON.stringify(meta, null, 2));
-}
-
-function readMeta(profileDir) {
-  const metaPath = path.join(profileDir, "meta.json");
-  if (!fs.existsSync(metaPath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(metaPath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
 function getMetaIdentity(meta) {
   if (!meta || !meta.identity) return null;
   const { email = null, accountName = null, accountId = null } = meta.identity;
@@ -274,52 +215,6 @@ function identitiesMatch(left, right) {
   if (left.accountId && right.accountId) return left.accountId === right.accountId;
   if (left.email && right.email) return left.email === right.email;
   return false;
-}
-
-function setActiveProfile(profilesDir, name) {
-  ensureDir(profilesDir);
-  fs.writeFileSync(path.join(profilesDir, "active"), `${name}\n`);
-}
-
-function getActiveProfile(profilesDir) {
-  const activePath = path.join(profilesDir, "active");
-  if (!fs.existsSync(activePath)) return null;
-  const value = fs.readFileSync(activePath, "utf8").trim();
-  return value.length ? value : null;
-}
-
-function timestampForFile() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  return [
-    now.getFullYear(),
-    pad(now.getMonth() + 1),
-    pad(now.getDate()),
-    "-",
-    pad(now.getHours()),
-    pad(now.getMinutes()),
-    pad(now.getSeconds()),
-  ].join("");
-}
-
-function backupCurrentConfig(configPath, profilesDir) {
-  const backupName = `__backup-${timestampForFile()}`;
-  const backupDir = path.join(profilesDir, backupName);
-  ensureDir(backupDir);
-  fs.copyFileSync(configPath, path.join(backupDir, "config.toml"));
-  writeMeta(backupDir, backupName, configPath);
-  return backupName;
-}
-
-function findMatchingProfile(profilesDir, configPath, { includeBackups = false } = {}) {
-  if (!fs.existsSync(configPath)) return null;
-  const configHash = fileHash(configPath);
-  const profiles = listProfiles(profilesDir, { includeBackups });
-  for (const name of profiles) {
-    const profileConfig = path.join(profilesDir, name, "config.toml");
-    if (fileHash(profileConfig) === configHash) return name;
-  }
-  return null;
 }
 
 function findProfilesByIdentity(profilesDir, identity, { includeBackups = false } = {}) {
@@ -337,24 +232,6 @@ function describeIdentity(identity) {
   if (identity.email) parts.push(identity.email);
   if (identity.accountId) parts.push(identity.accountId);
   return parts.join(" / ") || "unknown";
-}
-
-function saveProfile(name, configPath, profilesDir, force, identity = null) {
-  if (!isValidName(name)) {
-    die(`Invalid profile name: ${name}`);
-  }
-  if (!fs.existsSync(configPath)) {
-    die(`Config file not found: ${configPath}`);
-  }
-
-  const profileDir = path.join(profilesDir, name);
-  if (fs.existsSync(profileDir) && !force) {
-    die(`Profile exists: ${name} (use --force to overwrite)`);
-  }
-
-  ensureDir(profileDir);
-  fs.copyFileSync(configPath, path.join(profileDir, "config.toml"));
-  writeMeta(profileDir, name, configPath, identity);
 }
 
 function runWranglerLogin() {
@@ -434,24 +311,6 @@ function syncProfile(name, configPath, profilesDir, identity) {
 
   fs.copyFileSync(configPath, profileConfig);
   writeMeta(profileDir, name, configPath, identity);
-}
-
-function removeProfile(name, profilesDir) {
-  if (!isValidName(name)) {
-    die(`Invalid profile name: ${name}`);
-  }
-  const profileDir = path.join(profilesDir, name);
-  if (!fs.existsSync(profileDir)) {
-    die(`Profile not found: ${name}`);
-  }
-
-  fs.rmSync(profileDir, { recursive: true, force: true });
-
-  const active = getActiveProfile(profilesDir);
-  if (active === name) {
-    const activePath = path.join(profilesDir, "active");
-    if (fs.existsSync(activePath)) fs.unlinkSync(activePath);
-  }
 }
 
 function main() {
