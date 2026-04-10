@@ -85,6 +85,20 @@ test('list text output shows EXPIRED marker and default asterisk', () => {
   assert.match(r.stdout, /work@example\.com/);
 });
 
+test('list text output shows EXPIRES column for both valid and expired profiles', () => {
+  const dir = mkStore();
+  addProfile(dir, 'work');            // valid, far future
+  addProfile(dir, 'stale', { expired: true });  // expired, 2000-01-01
+  const r = run(['list'], dir);
+  assert.equal(r.status, 0, `stderr=${r.stderr}`);
+  // Header should have EXPIRES column
+  assert.match(r.stdout, /EXPIRES/);
+  // Valid profile should show 'in Nd' format and ISO date
+  assert.match(r.stdout, /in \d+d \(2099-01-01\)/);
+  // Expired profile should show 'ago' + ISO date
+  assert.match(r.stdout, /\d+d ago \(2000-01-01\)/);
+});
+
 test('list --plain is unchanged (names only, one per line)', () => {
   const dir = mkStore();
   addProfile(dir, 'work');

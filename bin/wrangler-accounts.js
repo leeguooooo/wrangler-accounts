@@ -96,6 +96,29 @@ function parseDuration(s) {
   return n * mult;
 }
 
+// Format an ISO expiration timestamp as a compact relative + absolute
+// string, e.g. "in 14d (2026-04-24)" or "30d ago (2026-03-11)".
+function formatExpiry(iso, now = Date.now()) {
+  if (!iso) return "(unknown)";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "(unknown)";
+  const delta = then - now;
+  const abs = Math.abs(delta);
+  const day = 86400000;
+  const hour = 3600000;
+  const minute = 60000;
+  let relative;
+  if (abs >= day) {
+    relative = `${Math.floor(abs / day)}d`;
+  } else if (abs >= hour) {
+    relative = `${Math.floor(abs / hour)}h`;
+  } else {
+    relative = `${Math.max(1, Math.floor(abs / minute))}m`;
+  }
+  const date = iso.slice(0, 10); // YYYY-MM-DD
+  return delta >= 0 ? `in ${relative} (${date})` : `${relative} ago (${date})`;
+}
+
 // Thin wrappers that turn thrown errors into die() calls, so the lib
 // functions remain pure / testable without depending on process.exit.
 function saveProfile(...args) {
@@ -448,20 +471,24 @@ function main() {
       return;
     }
     if (defaultName) console.log(`Default: ${defaultName}\n`);
-    const nameW = Math.max(4, ...entries.map((e) => e.name.length));
-    const statusW = 8; // fits 'expired', 'valid', 'unknown'
-    const header = `  ${"NAME".padEnd(nameW)}  ${"STATUS".padEnd(statusW)}  IDENTITY`;
-    console.log(header);
-    for (const e of entries) {
-      const marker = e.isDefault ? "*" : " ";
-      const statusLabel =
+    const rows = entries.map((e) => ({
+      marker: e.isDefault ? "*" : " ",
+      name: e.name,
+      status:
         e.status === "expired" ? "EXPIRED"
         : e.status === "valid" ? "valid"
-        : "unknown";
-      const idStr = e.identity ? describeIdentity(e.identity) : "(no identity)";
-      const exp = e.expirationTime ? ` (${e.expirationTime})` : "";
+        : "unknown",
+      expires: formatExpiry(e.expirationTime),
+      identity: e.identity ? describeIdentity(e.identity) : "(no identity)",
+    }));
+    const nameW = Math.max(4, ...rows.map((r) => r.name.length));
+    const statusW = Math.max(6, ...rows.map((r) => r.status.length));
+    const expiresW = Math.max(7, ...rows.map((r) => r.expires.length));
+    const header = `  ${"NAME".padEnd(nameW)}  ${"STATUS".padEnd(statusW)}  ${"EXPIRES".padEnd(expiresW)}  IDENTITY`;
+    console.log(header);
+    for (const r of rows) {
       console.log(
-        `${marker} ${e.name.padEnd(nameW)}  ${statusLabel.padEnd(statusW)}  ${idStr}${e.status === "expired" ? exp : ""}`,
+        `${r.marker} ${r.name.padEnd(nameW)}  ${r.status.padEnd(statusW)}  ${r.expires.padEnd(expiresW)}  ${r.identity}`,
       );
     }
     console.log();
