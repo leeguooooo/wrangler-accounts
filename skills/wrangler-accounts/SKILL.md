@@ -14,7 +14,7 @@ description: AWS-style multi-account convenience for Cloudflare Wrangler. Use wh
 This skill is only documentation — the actual `wrangler-accounts` binary must also be installed on the user's `PATH`. Before running any command below, verify:
 
 ```bash
-command -v wrangler-accounts
+command -v wrangler-accounts && wrangler-accounts --version
 ```
 
 If the command is missing, tell the user to install the CLI first:
@@ -29,6 +29,54 @@ npm i -g @leeguoo/wrangler-accounts
 npm i -g wrangler
 ```
 
+### Minimum versions you should ask the user to upgrade past
+
+If `wrangler-accounts --version` is below any of these, **upgrade first** before debugging anything else — older versions have real bugs that will misdirect you:
+
+| Version | What it fixed | Symptom on older versions |
+|---|---|---|
+| **≥ 1.2.2** | per-profile `WRANGLER_CACHE_DIR`, fixes account-id leak across profiles | `d1`/`r2 object` commands return `7403 not authorized` even though OAuth is valid; deploys silently land in the wrong account |
+| **≥ 1.3.0** | STATUS column distinguishes `valid` / `valid*` / `EXPIRED` (refresh-token-aware) | `list` shows `EXPIRED` for healthy profiles, scaring you into running `login` for no reason |
+| **≥ 1.4.0** | `login` refuses non-TTY contexts and accidental overwrites | `login <name>` hangs forever in non-interactive contexts; reflexive `login` overwrites a healthy profile |
+
+```bash
+npm i -g @leeguoo/wrangler-accounts@latest    # always-safe upgrade
+```
+
+## Triage flow — when something looks wrong
+
+**Run these in order before reaching for `login` or any destructive command.** The agent who skipped this step in a recent incident ended up overwriting a perfectly healthy profile in a sub-shell where the browser couldn't even open.
+
+```bash
+# 1. Verify your binary is recent enough (see version table above)
+wrangler-accounts --version
+
+# 2. Authoritative state of every profile (hits Cloudflare API per profile)
+wrangler-accounts list --deep
+```
+
+How to read `list --deep` output:
+
+| You see | Meaning | What to do |
+|---|---|---|
+| `STATUS valid`  + `VERIFIED ✓ ok` | profile is fine | nothing — proceed with whatever the user actually asked |
+| `STATUS valid*` + `VERIFIED ✓ ok` | profile is fine; access token will auto-refresh on next use | nothing — **`valid*` is healthy, do NOT re-login** |
+| `STATUS EXPIRED` + `VERIFIED ✓ ok` | rare; only on `< 1.3.0` binaries — STATUS is lying | upgrade the CLI; profile is fine |
+| `STATUS EXPIRED` + `VERIFIED ✗ Not logged in` | profile is genuinely broken | `wrangler-accounts login <name>` (interactive only) |
+| `STATUS valid` + `VERIFIED ✗` of any kind | refresh token revoked server-side | `wrangler-accounts login <name>` (interactive only) |
+| `STATUS unknown` | profile file lacks `expiration_time` | run `--deep` (already did) — trust VERIFIED |
+
+**Rule**: only suggest `wrangler-accounts login <name>` when at least one of:
+1. `list --deep` showed `VERIFIED ✗` for that profile, OR
+2. The profile doesn't exist at all yet, OR
+3. The user explicitly says "re-authenticate" / "log me in again"
+
+**If `list --deep` shows everything ✓ but a wrangler command still fails**, the root cause is somewhere other than wrangler-accounts — most likely:
+- Project-local `./.wrangler/state/` is sharing data across profiles (see "What is and isn't isolated")
+- The project's `wrangler.toml` has the wrong `account_id` hardcoded
+- The user is on a CLI version below 1.2.2 (account-id cache leak)
+- The wrangler subcommand actually needs `--remote` or `--local` and you forgot
+
 ## Quick Start
 
 - `wrangler-accounts login <name>` — interactive OAuth login into a new profile (never touches real `~/.wrangler`)
@@ -36,6 +84,8 @@ npm i -g wrangler
 - `wrangler-accounts deploy` — run `wrangler deploy` under the default profile
 - `wrangler-accounts --profile personal deploy` — one-shot override
 - `wrangler-accounts exec work -- npm run release` — run a command in an isolated subshell for the `work` profile
+
+> 💡 **Reading the STATUS column**: `valid` = healthy, `valid*` = healthy (will auto-refresh on next use, **don't re-login**), `EXPIRED` = truly broken (need login), `unknown` = run `--deep` to find out. Full table below in "List and inspect profiles".
 
 ## Tasks
 
