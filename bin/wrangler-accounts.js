@@ -695,6 +695,64 @@ function main() {
     if (!isValidName(name)) die(`Invalid profile name: ${name}`);
     ensureDir(profilesDir);
 
+    // Guard 1: refuse to run in a non-interactive context (CI, sub-agent,
+    // pipe). 'wrangler login' opens a browser and requires the user to
+    // click an authorize button. In a non-TTY context this hangs forever
+    // and any attempt is almost certainly an AI/script applying 'login'
+    // as if it were idempotent — it isn't.
+    if (!process.stdin.isTTY && !opts.force) {
+      die(
+        [
+          `'login' requires an interactive terminal — wrangler will open a browser`,
+          `and wait for authorization. Stdin is not a TTY here.`,
+          ``,
+          `If you are an AI agent or script trying to verify a profile is`,
+          `working, do NOT use 'login'. Use one of these instead:`,
+          ``,
+          `  wrangler-accounts whoami --profile ${name}    # static check (meta.json)`,
+          `  wrangler-accounts list --deep                 # live check (network call)`,
+          ``,
+          `If you really need to re-authenticate this profile non-interactively,`,
+          `pass --force to bypass this guard (the OAuth flow will still need a`,
+          `browser to complete).`,
+        ].join("\n"),
+        1,
+      );
+    }
+
+    // Guard 2: refuse to overwrite an existing profile that's already
+    // healthy unless --force is passed. 'login' is destructive — it
+    // OVERWRITES the saved profile by design. If the profile is already
+    // valid, the caller almost certainly meant to verify, not re-create.
+    const existingCfg = path.join(profilesDir, name, "config.toml");
+    if (fs.existsSync(existingCfg) && !opts.force) {
+      const session = readSessionState(existingCfg);
+      const looksHealthy = session.effective === "valid" || session.effective === "refreshable";
+      if (looksHealthy) {
+        die(
+          [
+            `Profile '${name}' already exists and looks healthy:`,
+            `  status:           ${session.effective}`,
+            `  expirationTime:   ${session.expirationTime || "(none)"}`,
+            `  hasRefreshToken:  ${session.hasRefreshToken}`,
+            ``,
+            `'login' is DESTRUCTIVE — it opens a browser and overwrites the saved`,
+            `profile. If you only wanted to verify the profile works, run instead:`,
+            ``,
+            `  wrangler-accounts whoami --profile ${name}     # fast, no network`,
+            `  wrangler-accounts list --deep                  # authoritative, hits Cloudflare API`,
+            ``,
+            `If you really intend to re-authenticate (e.g. you revoked the token`,
+            `in the Cloudflare dashboard, or want to switch which OAuth account`,
+            `this profile is bound to), pass --force:`,
+            ``,
+            `  wrangler-accounts login ${name} --force`,
+          ].join("\n"),
+          1,
+        );
+      }
+    }
+
     // Create a shadow HOME without pre-linking .wrangler/config/default.toml.
     // wrangler login will write a fresh file into shadow/.wrangler/config/
     // which we then move into the profile directory.

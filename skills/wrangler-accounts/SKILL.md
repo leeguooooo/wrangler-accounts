@@ -160,6 +160,34 @@ wrangler-accounts list                 # confirm the profile is saved
 
 The login flow runs inside an isolated shadow `HOME`, so the user's real `~/.wrangler/config/default.toml` is never touched.
 
+> ⚠️ **`login` is destructive.** It opens a browser, requires the user to click "Authorize" interactively, and **OVERWRITES** the named profile. As of 1.4.0, `wrangler-accounts login <name>` refuses to run if (a) stdin is not a TTY, or (b) the profile already exists and looks healthy — both unless you pass `--force`. **Never run `login` to "verify" or "refresh" a profile** — see the antipattern below.
+
+### ❌ Antipattern: running `login` to verify a profile works
+
+This is wrong:
+```bash
+wrangler-accounts login Xdreamstar2025   # ❌ DON'T do this just to check
+```
+
+Reasons:
+1. `login` is **destructive** — it overwrites the saved profile with a brand new OAuth flow.
+2. `login` requires a **browser and an interactive terminal** — it cannot complete in a Bash sub-shell, CI runner, or sub-agent context. The command will hang waiting for the user.
+3. The Cloudflare access token in a healthy profile auto-refreshes via `refresh_token` — there is **nothing to "log in to"** when the profile already works.
+
+Use one of these instead:
+
+```bash
+wrangler-accounts whoami --profile Xdreamstar2025   # fast, reads meta.json, no network
+wrangler-accounts list --deep                       # authoritative, runs wrangler whoami per profile
+wrangler-accounts list                              # quick STATUS overview (valid / valid* / EXPIRED / unknown)
+```
+
+Only fall back to `wrangler-accounts login <name>` when:
+- The profile **does not exist yet** (creating a new account profile from scratch)
+- The profile shows `EXPIRED` (truly expired, no refresh_token left) — see STATUS table above
+- `list --deep` returns `✗` with "Not logged in" / "refresh token may be revoked" (server-side revocation)
+- The user **explicitly says** "re-authenticate this profile" / "log me in again"
+
 ### User wants: check which account a profile is tied to, without running wrangler
 
 ```bash
