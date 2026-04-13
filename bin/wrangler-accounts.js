@@ -293,9 +293,9 @@ function useProfile(name, configPath, profilesDir, backup) {
   }
 
   const session = readSessionState(profileConfig);
-  if (session.expired) {
+  if (session.effective === 'expired') {
     die(
-      `Profile '${name}' has expired Wrangler OAuth credentials (expiration_time: ${session.expirationTime}). Run 'wrangler-accounts login ${name}' to refresh it.`
+      `Profile '${name}' has expired Wrangler OAuth credentials and no refresh_token to renew them (expiration_time: ${session.expirationTime}). Run 'wrangler-accounts login ${name}' to re-authenticate.`
     );
   }
 
@@ -409,9 +409,9 @@ function main() {
 
     const profileCfg = path.join(profilesDir, resolved.name, "config.toml");
     const session = readSessionState(profileCfg);
-    if (session.expired) {
+    if (session.effective === 'expired') {
       die(
-        `Profile '${resolved.name}' has expired Wrangler OAuth credentials (expiration_time: ${session.expirationTime}). Run 'wrangler-accounts login ${resolved.name}' to refresh it.`,
+        `Profile '${resolved.name}' has expired Wrangler OAuth credentials and no refresh_token to renew them (expiration_time: ${session.expirationTime}). Run 'wrangler-accounts login ${resolved.name}' to re-authenticate.`,
         3
       );
     }
@@ -1075,9 +1075,9 @@ function main() {
 
     const profileCfg = path.join(profilesDir, resolved.name, "config.toml");
     const session = readSessionState(profileCfg);
-    if (session.expired) {
+    if (session.effective === 'expired') {
       die(
-        `Profile '${resolved.name}' has expired Wrangler OAuth credentials. Run 'wrangler-accounts login ${resolved.name}' to refresh it.`,
+        `Profile '${resolved.name}' has expired Wrangler OAuth credentials and no refresh_token to renew them. Run 'wrangler-accounts login ${resolved.name}' to re-authenticate.`,
         3
       );
     }

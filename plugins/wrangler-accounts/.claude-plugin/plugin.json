@@ -1,7 +1,7 @@
 {
   "name": "wrangler-accounts",
   "description": "Cloudflare Wrangler multi-account helper with a bundled skill and Bash guard hook for Claude Code.",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "author": {
     "name": "Lee Guo"
   },

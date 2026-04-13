@@ -82,7 +82,7 @@ test('plugin.json parses and exposes required fields', () => {
   const plugin = readJson(PLUGIN_JSON);
   assert.equal(plugin.name, 'wrangler-accounts');
   assert.equal(typeof plugin.description, 'string');
-  assert.equal(plugin.version, '1.5.0');
+  assert.equal(plugin.version, '1.5.1');
 });
 
 test('marketplace.json parses and exposes required fields', () => {

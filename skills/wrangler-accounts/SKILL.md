@@ -310,15 +310,17 @@ wrangler deploy
 
 ## Troubleshooting
 
-### "Profile 'X' has expired Wrangler OAuth credentials"
+### "Profile 'X' has expired Wrangler OAuth credentials and no refresh_token to renew them"
 
-The saved OAuth access token is past its `expiration_time` and the refresh didn't happen (or Wrangler is older than 4.x). Refresh it interactively:
+The saved OAuth access_token is past its `expiration_time` AND there is no `refresh_token` in the profile config (no `offline_access` scope at login time, or the token was revoked). The profile is genuinely broken; only re-authenticating fixes it:
 
 ```bash
 wrangler-accounts login <name>
 ```
 
 This overwrites the existing profile with a fresh OAuth session. Any saved metadata (identity, etc.) is re-verified.
+
+**Note:** If you see this error in 1.5.0 or earlier, you may be hitting a known regression: any profile whose access_token had passed expiration was blocked even when a refresh_token was present. Upgrade to 1.5.1+ — `wrangler` itself silently refreshes those tokens on the next call, so wrangler-accounts no longer pre-flights against `expiration_time` alone.
 
 ### "No profile specified. Options: ..."
 
