@@ -1,0 +1,11 @@
+{
+  "name": "wrangler-accounts",
+  "description": "Cloudflare Wrangler multi-account helper with a bundled skill and Bash guard hook for Claude Code.",
+  "version": "1.5.0",
+  "author": {
+    "name": "Lee Guo"
+  },
+  "homepage": "https://github.com/leeguooooo/wrangler-accounts#readme",
+  "repository": "https://github.com/leeguooooo/wrangler-accounts",
+  "license": "MIT"
+}

@@ -1,15 +1,17 @@
 {
   "name": "@leeguoo/wrangler-accounts",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Cloudflare Wrangler multi-account manager — save, switch, and run wrangler against multiple Cloudflare Workers accounts with AWS-style --profile and per-invocation shadow HOME isolation.",
   "license": "MIT",
   "bin": {
     "wrangler-accounts": "bin/wrangler-accounts.js"
   },
   "files": [
+    ".claude-plugin",
     "bin",
     "lib",
     "completions",
+    "plugins",
     "skills"
   ],
   "keywords": [
@@ -55,7 +57,8 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "verify-package": "node scripts/verify-package.js",
-    "prepublishOnly": "npm test && npm run verify-package"
+    "check-skill-sync": "node -e \"const fs=require('fs');const a='skills/wrangler-accounts/SKILL.md';const b='plugins/wrangler-accounts/skills/wrangler-accounts/SKILL.md';if(fs.readFileSync(a,'utf8')!==fs.readFileSync(b,'utf8')){console.error('SKILL.md sync check failed: keep skills/wrangler-accounts/SKILL.md and plugins/wrangler-accounts/skills/wrangler-accounts/SKILL.md identical.');process.exit(1)}\"",
+    "prepublishOnly": "npm test && npm run verify-package && npm run check-skill-sync"
   },
   "engines": {
     "node": ">=16"

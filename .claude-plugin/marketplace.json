@@ -1,0 +1,33 @@
+{
+  "name": "leeguoo-tools",
+  "owner": {
+    "name": "Lee Guo"
+  },
+  "metadata": {
+    "description": "Claude Code plugins for practical developer workflows from the wrangler-accounts author.",
+    "version": "1.5.0"
+  },
+  "plugins": [
+    {
+      "name": "wrangler-accounts",
+      "source": "./plugins/wrangler-accounts",
+      "description": "Cloudflare Wrangler multi-account skill plus a Bash hook that blocks raw wrangler calls when local profiles are configured.",
+      "version": "1.5.0",
+      "author": {
+        "name": "Lee Guo"
+      },
+      "homepage": "https://github.com/leeguooooo/wrangler-accounts#readme",
+      "repository": "https://github.com/leeguooooo/wrangler-accounts",
+      "license": "MIT",
+      "keywords": [
+        "cloudflare",
+        "wrangler",
+        "accounts",
+        "multi-account",
+        "claude-code",
+        "hook",
+        "skill"
+      ]
+    }
+  ]
+}

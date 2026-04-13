@@ -20,19 +20,48 @@ wrangler-accounts --profile work tail my-worker
 wrangler-accounts --profile personal dev
 ```
 
+## Claude Code users (recommended)
+
+Install the marketplace and plugin first:
+
+```text
+/plugin marketplace add leeguooooo/wrangler-accounts
+/plugin install wrangler-accounts@leeguoo-tools
+```
+
+The plugin bundles the `wrangler-accounts` skill plus a Bash `PreToolUse` hook, so Claude Code can learn the workflow and block raw `wrangler` calls before they bypass your local profile isolation. No manual `settings.json` editing is required.
+
+The plugin does **not** install the CLI binary. Keep the npm package on your `PATH`:
+
+```bash
+npm i -g @leeguoo/wrangler-accounts
+```
+
+The guard only blocks direct `wrangler ...` Bash commands when all of these are true:
+
+- `wrangler-accounts` is installed on `PATH`
+- at least one local profile is configured
+- the current directory looks like a Cloudflare project (`wrangler.toml`, `wrangler.json`, or `wrangler.jsonc`) or Cloudflare API env vars are set
+
+If you explicitly want raw `wrangler`, bypass the hook for that command:
+
+```bash
+NOWRANGLER_ACCOUNTS_GUARD=1 wrangler deploy
+```
+
 ## What it does
 
 Every execution runs `wrangler` inside a per-invocation **shadow HOME** — a temporary directory that mirrors most of your real home, except `.wrangler/config/default.toml` is a symlink pointing at the saved profile's config. Token refreshes flow back to the profile automatically. Nothing touches your real `~/.wrangler`. Two parallel invocations get two independent shadow HOMEs.
 
 ## Install
 
-You need **two** things to get the full experience — the CLI binary (what actually runs) and the AI agent skill (what teaches your AI coding agent how to use it). Install both:
+If you do **not** use Claude Code plugins, install the CLI binary and the mirrored `skills.sh` skill separately:
 
 ```bash
 # 1. The CLI (always required)
 npm i -g @leeguoo/wrangler-accounts
 
-# 2. The AI agent skill (recommended if you use Claude Code / Cursor / Codex / etc.)
+# 2. The AI agent skill mirror (recommended if you use Cursor / Codex / Gemini CLI / etc.)
 npx skills add leeguooooo/wrangler-accounts -g -y
 ```
 
@@ -47,9 +76,9 @@ The CLI works standalone — you can skip step 2 if you don't use an AI coding a
 
 The AI will tell you to run commands like `wrangler-accounts --profile work deploy`; without step 1 those commands fail with "command not found".
 
-### AI agent skill — more options
+### `skills.sh` mirror — more options
 
-The repo ships an Agent Skill (`skills/wrangler-accounts/SKILL.md`) with multi-account deploy recipes, troubleshooting, CI guidance, and invariants AI can rely on. [skills.sh](https://skills.sh)'s CLI auto-detects which agent you use (Claude Code, Cursor, Codex, Gemini CLI, OpenCode, and 40+ others) and installs to the right directory.
+The repo keeps a mirrored Agent Skill at `skills/wrangler-accounts/SKILL.md` for [skills.sh](https://skills.sh). Claude Code users should prefer the plugin marketplace flow above; other agents can keep using `skills.sh` to install the same guidance markdown into their own skill directories.
 
 ```bash
 npx skills add leeguooooo/wrangler-accounts -g -y        # user-global, non-interactive
