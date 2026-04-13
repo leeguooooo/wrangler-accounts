@@ -30,6 +30,13 @@ Non-Claude-Code users can keep using the `skills.sh` distribution path for this 
 npx skills add leeguooooo/wrangler-accounts -g -y
 ```
 
+If a Claude Code user previously installed via `skills.sh`, removing the standalone copy avoids a duplicate `/wrangler-accounts` entry in the command picker:
+
+```bash
+npx skills remove wrangler-accounts
+# or: rm -rf ~/.agents/skills/wrangler-accounts
+```
+
 ## Prerequisites (check before running any recipe below)
 
 This skill is only documentation — the actual `wrangler-accounts` binary must also be installed on the user's `PATH`. Before running any command below, verify:

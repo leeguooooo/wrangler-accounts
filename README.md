@@ -49,6 +49,17 @@ If you explicitly want raw `wrangler`, bypass the hook for that command:
 NOWRANGLER_ACCOUNTS_GUARD=1 wrangler deploy
 ```
 
+### Upgrading from the `skills.sh` install
+
+If you previously installed this skill via `npx skills add leeguooooo/wrangler-accounts`, remove that standalone copy after installing the plugin — otherwise Claude Code's slash command picker shows two identical `/wrangler-accounts` entries (one from the skills.sh directory, one from the plugin):
+
+```bash
+npx skills remove wrangler-accounts
+# or, if the CLI is missing: rm -rf ~/.agents/skills/wrangler-accounts
+```
+
+Then run `/reload-plugins` and confirm only one entry remains.
+
 ## What it does
 
 Every execution runs `wrangler` inside a per-invocation **shadow HOME** — a temporary directory that mirrors most of your real home, except `.wrangler/config/default.toml` is a symlink pointing at the saved profile's config. Token refreshes flow back to the profile automatically. Nothing touches your real `~/.wrangler`. Two parallel invocations get two independent shadow HOMEs.
