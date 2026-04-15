@@ -111,7 +111,8 @@ WRANGLER_PROFILE=<name> wrangler-accounts <wrangler-args...>
 wrangler-accounts exec <name>                   # interactive subshell
 wrangler-accounts exec <name> -- <cmd> [args]   # one command
 
-wrangler-accounts login <name>                  # isolated OAuth login
+wrangler-accounts login <name>                  # isolated OAuth login (browser)
+wrangler-accounts token-add <name> <api-token> <account-id> [--force]  # API token profile (no browser)
 wrangler-accounts default [name | --unset]      # manage persistent default
 wrangler-accounts whoami [--profile <name>]     # show resolved identity
 wrangler-accounts list                          # fast table (name/status/expires/identity)
@@ -165,12 +166,32 @@ When you run `wrangler-accounts <wrangler-args>`, the active profile is resolved
 4. `profilesDir/default` (set via `wrangler-accounts default <name>`)
 5. Hard error with actionable hint
 
+## API token profiles (no browser required)
+
+Since 1.6.0 you can save a Cloudflare API token + account ID as a named profile — no OAuth browser flow:
+
+```bash
+# Get your API token: Cloudflare dashboard → My Profile → API Tokens
+wrangler-accounts token-add work CF_TOKEN_HERE ACCOUNT_ID_HERE
+
+# Use exactly like an OAuth profile
+wrangler-accounts --profile work deploy
+wrangler-accounts work r2 list
+```
+
+Token profiles appear in `list` with `[token]` type and `STATUS: token`. There's no expiration; they're always ready.
+
+**Env-var pass-through:** if `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are already in the environment, no profile selection is needed at all:
+
+```bash
+CLOUDFLARE_API_TOKEN=xxx CLOUDFLARE_ACCOUNT_ID=yyy wrangler-accounts deploy
+```
+
 ## When to use `wrangler-accounts` vs. native env vars
 
-`wrangler-accounts` is a **local developer convenience** for juggling multiple OAuth sessions on your workstation. It is not the right primitive for CI.
-
-- **Local dev, multiple accounts** → `wrangler-accounts`
-- **CI / deploy pipelines** → **`CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` with plain `wrangler`**. Wrangler is designed to read those env vars natively. Create an API token in the Cloudflare dashboard with the scopes your pipeline needs, set the two env vars in your CI secrets, and call `wrangler deploy` directly — no `wrangler-accounts` involved.
+- **Local dev, multiple OAuth accounts** → `wrangler-accounts login <name>` (the classic use case)
+- **Local dev, API token accounts** → `wrangler-accounts token-add <name> <token> <account-id>` (1.6.0+)
+- **CI / deploy pipelines** → either `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` with plain `wrangler`, or the env-var pass-through mode above
 - **Shared scripts** that run locally or in CI → parameterize on `WRANGLER_PROFILE` so devs can run them with `WRANGLER_PROFILE=work wrangler-accounts ./deploy.sh`.
 
 ## Options

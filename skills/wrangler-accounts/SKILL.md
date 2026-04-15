@@ -66,6 +66,7 @@ If `wrangler-accounts --version` is below any of these, **upgrade first** before
 | **≥ 1.2.2** | per-profile `WRANGLER_CACHE_DIR`, fixes account-id leak across profiles | `d1`/`r2 object` commands return `7403 not authorized` even though OAuth is valid; deploys silently land in the wrong account |
 | **≥ 1.3.0** | STATUS column distinguishes `valid` / `valid*` / `EXPIRED` (refresh-token-aware) | `list` shows `EXPIRED` for healthy profiles, scaring you into running `login` for no reason |
 | **≥ 1.4.0** | `login` refuses non-TTY contexts and accidental overwrites | `login <name>` hangs forever in non-interactive contexts; reflexive `login` overwrites a healthy profile |
+| **≥ 1.6.0** | API token profiles (`token-add`) + anonymous env-var pass-through | only OAuth profiles existed; `CLOUDFLARE_API_TOKEN` in env still required a named profile to be selected |
 
 ```bash
 npm i -g @leeguoo/wrangler-accounts@latest    # always-safe upgrade
@@ -108,6 +109,7 @@ How to read `list --deep` output:
 ## Quick Start
 
 - `wrangler-accounts login <name>` — interactive OAuth login into a new profile (never touches real `~/.wrangler`)
+- `wrangler-accounts token-add <name> <api-token> <account-id>` — save an API token profile (no browser login needed)
 - `wrangler-accounts default <name>` — set the persistent default profile
 - `wrangler-accounts deploy` — run `wrangler deploy` under the default profile
 - `wrangler-accounts --profile personal deploy` — one-shot override
@@ -169,6 +171,7 @@ Use `--json` for structured output.
 | `valid*` / `refreshable` | access_token past expiry **BUT** refresh_token present; wrangler will auto-refresh on next use | **none** — this is fine, don't scare the user |
 | `EXPIRED` / `expired` | access_token expired **AND** no refresh_token saved; profile is genuinely broken | `wrangler-accounts login <name>` |
 | `unknown` | profile file has no `expiration_time` field | run `list --deep` to verify live |
+| `token` | API token profile (1.6.0+) — no expiration concept, always ready | none |
 
 **Cloudflare OAuth lifecycle reference:** access tokens are short-lived (~1 hour) by design. Every profile with `offline_access` in its scopes also has a long-lived refresh_token (~30 days, silently extended on use). Wrangler refreshes access tokens automatically whenever it runs a command and the current one is past expiry. **Do not tell the user to re-login just because `list` shows an expired access token** — check `hasRefreshToken` first. If the profile's STATUS is `valid*` / `refreshable`, nothing is wrong.
 
@@ -176,13 +179,36 @@ The only time a user actually needs `wrangler-accounts login <name>` again is:
 1. STATUS is `EXPIRED` (no refresh_token at all — profile was saved without `offline_access` scope)
 2. OR `list --deep` returns `✗` with "Not logged in" / "refresh token may be revoked" (refresh token itself got invalidated)
 
+### Save an API token profile (no browser required)
+
+`wrangler-accounts token-add <name> <api-token> <account-id> [--force]`
+
+Saves a Cloudflare API token + account ID as a named profile. No OAuth browser flow needed. The credentials are stored in `token.json` (mode 0600) inside the profile directory.
+
+```bash
+# Get your API token from: Cloudflare dashboard → My Profile → API Tokens
+wrangler-accounts token-add work CF_TOKEN_HERE ACCOUNT_ID_HERE
+
+# Use identically to OAuth profiles
+wrangler-accounts --profile work deploy
+wrangler-accounts work r2 list
+```
+
+Token profiles appear in `list` with a `[token]` type indicator and `STATUS: token` — there is no expiration concept, so they are always ready to use. `remove` works the same as for OAuth profiles.
+
+**Env-var pass-through (1.6.0+):** when `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are already set in the environment and no profile is specified, `wrangler-accounts` runs in anonymous-token mode (no named profile needed). Useful for CI jobs that inject credentials via secrets:
+
+```bash
+CLOUDFLARE_API_TOKEN=xxx CLOUDFLARE_ACCOUNT_ID=yyy wrangler-accounts deploy
+```
+
 ### Save, sync, login, remove
 
 - `wrangler-accounts save <name>` — snapshot current Wrangler config as a profile
 - `wrangler-accounts sync <name>` — refresh a specific profile from the current login
 - `wrangler-accounts sync-default` — refresh the default profile
 - `wrangler-accounts login <name>` — fresh isolated OAuth login
-- `wrangler-accounts remove <name>` — delete a profile
+- `wrangler-accounts remove <name>` — delete a profile (works for both OAuth and token profiles)
 
 ### Clean up stale shadow HOMEs
 
@@ -327,10 +353,12 @@ This overwrites the existing profile with a fresh OAuth session. Any saved metad
 The user ran `wrangler-accounts <wrangler-args>` without a resolvable profile. Fix one of:
 
 ```bash
-wrangler-accounts --profile <name> <args>       # one-shot
+wrangler-accounts --profile <name> <args>        # one-shot
 WRANGLER_PROFILE=<name> wrangler-accounts <args> # env var
-wrangler-accounts default <name>                # persistent default
+wrangler-accounts default <name>                 # persistent default
 ```
+
+**1.6.0+**: if `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are both present in the environment, this error no longer fires — the tool runs in anonymous-token mode automatically.
 
 ### "Profile not found: X"
 
@@ -437,7 +465,32 @@ If a user is hitting a "wrong account" symptom and the credentials look right, t
 
 ## CI guidance
 
-For CI and deploy pipelines, **use `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` with plain `wrangler`**, not saved OAuth profiles. `wrangler-accounts` is a local developer convenience for juggling OAuth sessions on your workstation, not a CI primitive.
+For CI and deploy pipelines you have two options:
+
+**Option 1 — plain `wrangler` with env vars (simplest for CI):**
+
+```bash
+CLOUDFLARE_API_TOKEN=<token>
+CLOUDFLARE_ACCOUNT_ID=<account-id>
+wrangler deploy
+```
+
+**Option 2 — `wrangler-accounts` with a token profile (useful when you want the same CLI both locally and in CI):**
+
+```bash
+# Save once (locally or during CI bootstrap):
+wrangler-accounts token-add work "$CF_TOKEN" "$CF_ACCOUNT_ID"
+# Use the same commands locally and in CI:
+wrangler-accounts --profile work deploy
+```
+
+Or use the anonymous pass-through (no profile needed if env vars are present):
+
+```bash
+CLOUDFLARE_API_TOKEN="$CF_TOKEN" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT_ID" wrangler-accounts deploy
+```
+
+`wrangler-accounts` is primarily a local developer convenience for juggling OAuth sessions on your workstation, but since 1.6.0 it also supports API token profiles for teams that want a consistent CLI interface across local and CI environments.
 
 ## Paths and environment
 
@@ -453,7 +506,7 @@ Use `--json` when another tool needs to parse results. All v1.0 commands that pr
 
 ## Naming rules
 
-Profile names: letters, numbers, dot, underscore, dash only. Names matching management subcommand names (`exec`, `default`, `whoami`, `gc`, `login`, `list`, `status`, `save`, `sync`, `sync-default`, `remove`, `use`, `sync-active`) cannot be reached via positional shorthand — use `--profile <name>` for those.
+Profile names: letters, numbers, dot, underscore, dash only. Names matching management subcommand names (`exec`, `default`, `whoami`, `gc`, `login`, `token-add`, `list`, `status`, `save`, `sync`, `sync-default`, `remove`, `use`, `sync-active`) cannot be reached via positional shorthand — use `--profile <name>` for those.
 
 ## Deprecated
 
