@@ -376,6 +376,14 @@ function parseArgs(argv) {
     // forwarded to wrangler verbatim (including wrangler's own --env,
     // --json, etc.).
     if (sawFirstNonFlag && !sawManagementSubcommand) {
+      // --profile / -p must not be forwarded to wrangler; absorb it here so
+      // users can write it after the wrangler subcommand:
+      //   wrangler-accounts deploy --config wrangler.prod.toml --profile myprof
+      if ((arg === "--profile" || arg === "-p") && i + 1 < argv.length) {
+        opts.profile = argv[i + 1];
+        i += 1;
+        continue;
+      }
       rest.push(arg);
       continue;
     }

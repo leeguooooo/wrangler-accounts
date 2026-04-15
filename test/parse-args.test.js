@@ -132,6 +132,22 @@ test('-p is now --profile (v1.0 breaking change)', () => {
   assert.equal(r.payload.env.WRANGLER_PROFILE, 'work');
 });
 
+test('--profile after subcommand: deploy --config x --profile work works', () => {
+  const { shim, profilesDir } = setupShimAndProfiles();
+  const r = runCli(['deploy', '--config', 'wrangler.prod.toml', '--profile', 'work'], { shim, profilesDir });
+  assert.equal(r.status, 0, `stderr=${r.stderr}`);
+  assert.deepEqual(r.payload.argv, ['deploy', '--config', 'wrangler.prod.toml']);
+  assert.equal(r.payload.env.WRANGLER_PROFILE, 'work');
+});
+
+test('-p after subcommand: deploy --profile work using short flag', () => {
+  const { shim, profilesDir } = setupShimAndProfiles();
+  const r = runCli(['deploy', '-p', 'personal'], { shim, profilesDir });
+  assert.equal(r.status, 0, `stderr=${r.stderr}`);
+  assert.deepEqual(r.payload.argv, ['deploy']);
+  assert.equal(r.payload.env.WRANGLER_PROFILE, 'personal');
+});
+
 test('--version prints package.json version', () => {
   const pkg = require('../package.json');
   for (const flag of ['--version', '-v', '-V']) {
