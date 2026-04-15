@@ -37,6 +37,7 @@ const {
   saveProfile: saveProfileImpl,
   saveTokenProfile: saveTokenProfileImpl,
   readTokenCredentials,
+  setProfileNote: setProfileNoteImpl,
   removeProfile: removeProfileImpl,
 } = require("../lib/profile-store");
 const {
@@ -67,6 +68,7 @@ const MANAGEMENT_SUBCOMMANDS = new Set([
   "remove",
   "default",
   "token-add",
+  "note",
   "whoami",
   "gc",
   "use",
@@ -604,10 +606,11 @@ function main() {
         type,
         isDefault: name === defaultName,
         isActive: name === activeName,
-        status: session.effective, // 'valid' | 'refreshable' | 'expired' | 'unknown'
+        status: session.effective, // 'valid' | 'refreshable' | 'expired' | 'unknown' | 'token'
         expirationTime: session.expirationTime,
         hasRefreshToken: session.hasRefreshToken,
         identity,
+        description: (meta && meta.description) || null,
         verified: null,
         verifyError: null,
       };
@@ -690,11 +693,14 @@ function main() {
         : e.verified === false ? `✗ ${e.verifyError || "failed"}`
         : "—",
       identity: e.identity ? describeIdentity(e.identity) : "(no identity)",
+      note: e.description || "",
     }));
+    const hasNotes = rows.some((r) => r.note);
     const nameW = Math.max(4, ...rows.map((r) => r.name.length));
     const statusW = Math.max(6, ...rows.map((r) => r.status.length));
     const expiresW = Math.max(7, ...rows.map((r) => r.expires.length));
     const verifiedW = Math.max(8, ...rows.map((r) => r.verified.length));
+    const noteW = hasNotes ? Math.max(4, ...rows.map((r) => r.note.length)) : 0;
 
     let header;
     if (opts.deep) {
@@ -702,17 +708,17 @@ function main() {
     } else {
       header = `  ${"NAME".padEnd(nameW)}  ${"STATUS".padEnd(statusW)}  ${"EXPIRES".padEnd(expiresW)}  IDENTITY`;
     }
+    if (hasNotes) header += `  NOTE`;
     console.log(header);
     for (const r of rows) {
+      let line;
       if (opts.deep) {
-        console.log(
-          `${r.marker} ${r.name.padEnd(nameW)}  ${r.status.padEnd(statusW)}  ${r.expires.padEnd(expiresW)}  ${r.verified.padEnd(verifiedW)}  ${r.identity}`,
-        );
+        line = `${r.marker} ${r.name.padEnd(nameW)}  ${r.status.padEnd(statusW)}  ${r.expires.padEnd(expiresW)}  ${r.verified.padEnd(verifiedW)}  ${r.identity}`;
       } else {
-        console.log(
-          `${r.marker} ${r.name.padEnd(nameW)}  ${r.status.padEnd(statusW)}  ${r.expires.padEnd(expiresW)}  ${r.identity}`,
-        );
+        line = `${r.marker} ${r.name.padEnd(nameW)}  ${r.status.padEnd(statusW)}  ${r.expires.padEnd(expiresW)}  ${r.identity}`;
       }
+      if (hasNotes) line += `  ${r.note}`;
+      console.log(line);
     }
     console.log();
     if (opts.deep) {
@@ -861,6 +867,36 @@ function main() {
     ensureDir(profilesDir);
     saveTokenProfile(name, apiToken, accountId, profilesDir, opts.force);
     console.log(`Saved token profile '${name}'`);
+    return;
+  }
+
+  if (command === "note") {
+    const name = rest[1];
+    if (!name) die("Usage: wrangler-accounts note <name> [<text>] [--clear]");
+    if (!isValidName(name)) die(`Invalid profile name: ${name}`);
+    const profileDir = path.join(profilesDir, name);
+    if (!fs.existsSync(profileDir)) die(`Profile not found: ${name}`);
+
+    if (opts.clear) {
+      setProfileNoteImpl(profilesDir, name, null);
+      console.log(`Note cleared for profile '${name}'.`);
+    } else {
+      // Everything after the name is the note text
+      const noteText = rest.slice(2).join(" ").trim();
+      if (!noteText) {
+        // No text supplied — show current note
+        const meta = readMeta(profileDir);
+        const note = meta && meta.description;
+        if (note) {
+          console.log(note);
+        } else {
+          console.log(`(no note set for '${name}')`);
+        }
+      } else {
+        setProfileNoteImpl(profilesDir, name, noteText);
+        console.log(`Note set for profile '${name}'.`);
+      }
+    }
     return;
   }
 

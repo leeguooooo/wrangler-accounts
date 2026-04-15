@@ -1,6 +1,6 @@
 {
   "name": "@leeguoo/wrangler-accounts",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "Cloudflare Wrangler multi-account manager — save, switch, and run wrangler against multiple Cloudflare Workers accounts with AWS-style --profile and per-invocation shadow HOME isolation.",
   "license": "MIT",
   "bin": {
