@@ -18,9 +18,11 @@ const {
   isValidName,
   isBackupName,
   listProfiles,
+  getProfileType,
   fileHash,
   readExpirationTime,
   readSessionState,
+  readTokenSessionState,
   filesEqual,
   writeMeta,
   readMeta,
@@ -33,6 +35,8 @@ const {
   backupCurrentConfig,
   findMatchingProfile,
   saveProfile: saveProfileImpl,
+  saveTokenProfile: saveTokenProfileImpl,
+  readTokenCredentials,
   removeProfile: removeProfileImpl,
 } = require("../lib/profile-store");
 const {
@@ -62,6 +66,7 @@ const MANAGEMENT_SUBCOMMANDS = new Set([
   "login",
   "remove",
   "default",
+  "token-add",
   "whoami",
   "gc",
   "use",
@@ -129,6 +134,10 @@ function removeProfile(...args) {
   try { return removeProfileImpl(...args); }
   catch (err) { die(err.message); }
 }
+function saveTokenProfile(...args) {
+  try { return saveTokenProfileImpl(...args); }
+  catch (err) { die(err.message); }
+}
 
 let outputJson = false;
 
@@ -139,6 +148,156 @@ function die(message, exitCode = 1) {
     console.error(`Error: ${message}`);
   }
   process.exit(exitCode);
+}
+
+function profileTypeForName(profilesDir, name) {
+  return getProfileType(path.join(profilesDir, name));
+}
+
+function tokenProfileExists(profilesDir, name) {
+  return profileTypeForName(profilesDir, name) !== null;
+}
+
+function noProfileMessage() {
+  return [
+    'No profile specified. Options:',
+    '  - wrangler-accounts --profile <name> ...',
+    '  - WRANGLER_PROFILE=<name> wrangler-accounts ...',
+    '  - wrangler-accounts default <name>   (set a persistent default)',
+  ].join('\n');
+}
+
+function resolveProfileAny({
+  cliProfile,
+  positional,
+  env,
+  profilesDir,
+  managementSubcommands,
+}) {
+  try {
+    return resolveProfile({
+      cliProfile,
+      positional,
+      env,
+      profilesDir,
+      managementSubcommands,
+    });
+  } catch (err) {
+    if (!(err instanceof ResolveError)) throw err;
+    if (err.code === "INVALID_NAME") throw err;
+  }
+
+  if (cliProfile) {
+    if (!isValidName(cliProfile)) {
+      throw new ResolveError(`Invalid profile name: ${cliProfile}`, "INVALID_NAME");
+    }
+    if (tokenProfileExists(profilesDir, cliProfile)) {
+      return { name: cliProfile, source: "cli" };
+    }
+    throw new ResolveError(`Profile not found: ${cliProfile}`, "PROFILE_NOT_FOUND");
+  }
+
+  if (positional && !managementSubcommands.has(positional)) {
+    if (isValidName(positional) && tokenProfileExists(profilesDir, positional)) {
+      return { name: positional, source: "positional" };
+    }
+  }
+
+  const envProfile = env && env.WRANGLER_PROFILE;
+  if (envProfile && envProfile.length) {
+    if (!isValidName(envProfile)) {
+      throw new ResolveError(`Invalid profile name: ${envProfile}`, "INVALID_NAME");
+    }
+    if (tokenProfileExists(profilesDir, envProfile)) {
+      return { name: envProfile, source: "env" };
+    }
+    throw new ResolveError(`Profile not found: ${envProfile}`, "PROFILE_NOT_FOUND");
+  }
+
+  const def = getDefaultProfile(profilesDir);
+  if (def) {
+    if (!isValidName(def)) {
+      throw new ResolveError(`Invalid profile name: ${def}`, "INVALID_NAME");
+    }
+    if (tokenProfileExists(profilesDir, def)) {
+      return { name: def, source: "default" };
+    }
+    throw new ResolveError(`Profile not found: ${def}`, "PROFILE_NOT_FOUND");
+  }
+
+  throw new ResolveError(noProfileMessage(), "NO_PROFILE");
+}
+
+function runAnonymousTokenMode({
+  command,
+  args,
+  captureStdout = false,
+}) {
+  return runIsolated({
+    profile: "token-env",
+    profileCfg: null,
+    profileDir: null,
+    realHome: os.homedir(),
+    command,
+    args,
+    apiToken: process.env.CLOUDFLARE_API_TOKEN || null,
+    accountId: process.env.CLOUDFLARE_ACCOUNT_ID || null,
+    baseEnv: process.env,
+    captureStdout,
+    cloudflaredPath: findCloudflared(),
+  });
+}
+
+function runResolvedProfileCommand({
+  resolved,
+  profilesDir,
+  command,
+  args,
+  captureStdout = false,
+}) {
+  const profileDir = path.join(profilesDir, resolved.name);
+  const profileType = getProfileType(profileDir);
+
+  if (profileType === "token") {
+    const creds = readTokenCredentials(profileDir);
+    if (!creds || !creds.apiToken) {
+      die(`Token profile '${resolved.name}' is missing token.json credentials.`);
+    }
+    return runIsolated({
+      profile: resolved.name,
+      profileCfg: null,
+      profileDir,
+      realHome: os.homedir(),
+      command,
+      args,
+      apiToken: creds.apiToken,
+      accountId: creds.accountId || null,
+      baseEnv: process.env,
+      captureStdout,
+      cloudflaredPath: findCloudflared(),
+    });
+  }
+
+  const profileCfg = path.join(profileDir, "config.toml");
+  const session = readSessionState(profileCfg);
+  if (session.effective === 'expired') {
+    die(
+      `Profile '${resolved.name}' has expired Wrangler OAuth credentials and no refresh_token to renew them (expiration_time: ${session.expirationTime}). Run 'wrangler-accounts login ${resolved.name}' to re-authenticate.`,
+      3
+    );
+  }
+
+  return runIsolated({
+    profile: resolved.name,
+    profileCfg,
+    profileDir,
+    realHome: os.homedir(),
+    command,
+    args,
+    baseEnv: process.env,
+    captureStdout,
+    cloudflaredPath: findCloudflared(),
+  });
 }
 
 function printHelp(exitCode = 0) {
@@ -152,6 +311,7 @@ Commands:
   status
   login <name>
   save <name>
+  token-add <name> <api-token> <account-id>
   sync <name>
   sync-active
   use <name>
@@ -391,7 +551,7 @@ function main() {
 
     let resolved;
     try {
-      resolved = resolveProfile({
+      resolved = resolveProfileAny({
         cliProfile: profileArg,
         positional,
         env: process.env,
@@ -400,6 +560,13 @@ function main() {
       });
     } catch (err) {
       if (err instanceof ResolveError) {
+        if (err.code === "NO_PROFILE" && process.env.CLOUDFLARE_API_TOKEN) {
+          const result = runAnonymousTokenMode({
+            command: "wrangler",
+            args: rest,
+          });
+          process.exit(result.exitCode);
+        }
         const exitCode =
           err.code === "NO_PROFILE" || err.code === "PROFILE_NOT_FOUND" ? 2 : 1;
         die(err.message, exitCode);
@@ -407,26 +574,14 @@ function main() {
       throw err;
     }
 
-    const profileCfg = path.join(profilesDir, resolved.name, "config.toml");
-    const session = readSessionState(profileCfg);
-    if (session.effective === 'expired') {
-      die(
-        `Profile '${resolved.name}' has expired Wrangler OAuth credentials and no refresh_token to renew them (expiration_time: ${session.expirationTime}). Run 'wrangler-accounts login ${resolved.name}' to re-authenticate.`,
-        3
-      );
-    }
-
     // If positional was consumed as profile, drop it from wrangler argv
     const wranglerArgs = resolved.source === "positional" ? rest.slice(1) : rest;
 
-    const result = runIsolated({
-      profile: resolved.name,
-      profileCfg,
-      realHome: os.homedir(),
+    const result = runResolvedProfileCommand({
+      resolved,
+      profilesDir,
       command: "wrangler",
       args: wranglerArgs,
-      baseEnv: process.env,
-      cloudflaredPath: findCloudflared(),
     });
     process.exit(result.exitCode);
   }
@@ -438,12 +593,15 @@ function main() {
 
     const entries = profiles.map((name) => {
       const profileDir = path.join(profilesDir, name);
+      const type = getProfileType(profileDir) || "oauth";
       const cfgPath = path.join(profileDir, "config.toml");
-      const session = readSessionState(cfgPath);
+      const session =
+        type === "token" ? readTokenSessionState() : readSessionState(cfgPath);
       const meta = readMeta(profileDir);
       const identity = getMetaIdentity(meta);
       return {
         name,
+        type,
         isDefault: name === defaultName,
         isActive: name === activeName,
         status: session.effective, // 'valid' | 'refreshable' | 'expired' | 'unknown'
@@ -468,17 +626,14 @@ function main() {
       }
       const cloudflaredPath = findCloudflared();
       for (const e of entries) {
-        const profileCfg = path.join(profilesDir, e.name, "config.toml");
         try {
-          const r = runIsolated({
-            profile: e.name,
-            profileCfg,
-            realHome: os.homedir(),
+          const resolved = { name: e.name, source: "deep" };
+          const r = runResolvedProfileCommand({
+            resolved,
+            profilesDir,
             command: "wrangler",
             args: ["whoami"],
-            baseEnv: process.env,
             captureStdout: true,
-            cloudflaredPath,
           });
           const output = `${r.stdout || ""}\n${r.stderr || ""}`;
           if (r.exitCode === 0) {
@@ -522,7 +677,7 @@ function main() {
     if (defaultName) console.log(`Default: ${defaultName}\n`);
     const rows = entries.map((e) => ({
       marker: e.isDefault ? "*" : " ",
-      name: e.name,
+      name: `${e.name} [${e.type}]`,
       status:
         e.status === "expired" ? "EXPIRED"
         : e.status === "refreshable" ? "valid*"
@@ -594,12 +749,15 @@ function main() {
     const matchType = exactMatch ? "hash" : identityMatches.length === 1 ? "identity" : null;
     const profileStates = Object.fromEntries(
       profiles.map((name) => {
-        const profileConfig = path.join(profilesDir, name, "config.toml");
-        const meta = readMeta(path.join(profilesDir, name));
+        const profileDir = path.join(profilesDir, name);
+        const type = getProfileType(profileDir) || "oauth";
+        const profileConfig = path.join(profileDir, "config.toml");
+        const meta = readMeta(profileDir);
         return [
           name,
           {
-            ...readSessionState(profileConfig),
+            ...(type === "token" ? readTokenSessionState() : readSessionState(profileConfig)),
+            type,
             identity: getMetaIdentity(meta),
           },
         ];
@@ -651,10 +809,13 @@ function main() {
       }
       for (const name of profiles) {
         const profileSession = profileStates[name];
-        if (!profileSession.expirationTime) continue;
-        const state = profileSession.expired ? "expired" : "valid";
+        const state =
+          profileSession.effective === "token"
+            ? "token"
+            : profileSession.expired ? "expired" : "valid";
         const suffix = profileSession.identity ? `, ${describeIdentity(profileSession.identity)}` : "";
-        console.log(`- ${name}: ${profileSession.expirationTime} (${state}${suffix ? suffix : ""})`);
+        const expiry = profileSession.expirationTime || "(n/a)";
+        console.log(`- ${name} [${profileSession.type}]: ${expiry} (${state}${suffix ? suffix : ""})`);
       }
     }
     return;
@@ -686,6 +847,19 @@ function main() {
     } else {
       console.log(`Saved profile '${name}' from ${configPath}`);
     }
+    return;
+  }
+
+  if (command === "token-add") {
+    const name = rest[1];
+    const apiToken = rest[2];
+    const accountId = rest[3];
+    if (!name) die("Missing profile name for token-add");
+    if (!apiToken) die("Missing API token for token-add");
+    if (!accountId) die("Missing account ID for token-add");
+    ensureDir(profilesDir);
+    saveTokenProfile(name, apiToken, accountId, profilesDir, opts.force);
+    console.log(`Saved token profile '${name}'`);
     return;
   }
 
@@ -983,7 +1157,7 @@ function main() {
     const profileArg = opts.profile || rest[1] || null;
     let resolved;
     try {
-      resolved = resolveProfile({
+      resolved = resolveProfileAny({
         cliProfile: profileArg,
         positional: null,
         env: process.env,
@@ -991,10 +1165,29 @@ function main() {
         managementSubcommands: MANAGEMENT_SUBCOMMANDS,
       });
     } catch (err) {
-      if (err instanceof ResolveError) die(err.message, 2);
+      if (err instanceof ResolveError) {
+        if (err.code === "NO_PROFILE" && process.env.CLOUDFLARE_API_TOKEN) {
+          const result = runAnonymousTokenMode({
+            command: "wrangler",
+            args: ["whoami"],
+          });
+          process.exit(result.exitCode);
+        }
+        die(err.message, 2);
+      }
       throw err;
     }
     const profileDir = path.join(profilesDir, resolved.name);
+    const profileType = getProfileType(profileDir) || "oauth";
+    if (profileType === "token") {
+      const result = runResolvedProfileCommand({
+        resolved,
+        profilesDir,
+        command: "wrangler",
+        args: ["whoami"],
+      });
+      process.exit(result.exitCode);
+    }
     const meta = readMeta(profileDir);
     const identity = getMetaIdentity(meta);
     if (opts.json) {
@@ -1004,6 +1197,7 @@ function main() {
             command: "whoami",
             profile: resolved.name,
             source: resolved.source,
+            type: profileType,
             identity,
           },
           null,
@@ -1061,7 +1255,7 @@ function main() {
 
     let resolved;
     try {
-      resolved = resolveProfile({
+      resolved = resolveProfileAny({
         cliProfile: profileName,
         positional: null,
         env: process.env,
@@ -1071,15 +1265,6 @@ function main() {
     } catch (err) {
       if (err instanceof ResolveError) die(err.message, 2);
       throw err;
-    }
-
-    const profileCfg = path.join(profilesDir, resolved.name, "config.toml");
-    const session = readSessionState(profileCfg);
-    if (session.effective === 'expired') {
-      die(
-        `Profile '${resolved.name}' has expired Wrangler OAuth credentials and no refresh_token to renew them. Run 'wrangler-accounts login ${resolved.name}' to re-authenticate.`,
-        3
-      );
     }
 
     // Everything after `--` is the user command. Without `--`, launch $SHELL -i.
@@ -1095,14 +1280,11 @@ function main() {
       cmdArgs = ["-i"];
     }
 
-    const result = runIsolated({
-      profile: resolved.name,
-      profileCfg,
-      realHome: os.homedir(),
+    const result = runResolvedProfileCommand({
+      resolved,
+      profilesDir,
       command: cmd,
       args: cmdArgs,
-      baseEnv: process.env,
-      cloudflaredPath: findCloudflared(),
     });
     process.exit(result.exitCode);
   }
@@ -1138,8 +1320,7 @@ function main() {
     }
     // Set the default profile
     if (!isValidName(name)) die(`Invalid profile name: ${name}`);
-    const cfg = path.join(profilesDir, name, "config.toml");
-    if (!fs.existsSync(cfg)) die(`Profile not found: ${name}`, 2);
+    if (!tokenProfileExists(profilesDir, name)) die(`Profile not found: ${name}`, 2);
     setDefaultProfile(profilesDir, name);
     if (opts.json) {
       console.log(JSON.stringify({ command: "default", name }, null, 2));
