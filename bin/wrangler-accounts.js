@@ -684,7 +684,7 @@ function main() {
         : e.status === "valid" ? "valid"
         : e.status === "token" ? "token"
         : "unknown",
-      expires: formatExpiry(e.expirationTime),
+      expires: e.type === "token" ? "—" : formatExpiry(e.expirationTime),
       verified:
         e.verified === true ? "✓ ok"
         : e.verified === false ? `✗ ${e.verifyError || "failed"}`
