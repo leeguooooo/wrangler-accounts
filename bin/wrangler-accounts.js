@@ -682,6 +682,7 @@ function main() {
         e.status === "expired" ? "EXPIRED"
         : e.status === "refreshable" ? "valid*"
         : e.status === "valid" ? "valid"
+        : e.status === "token" ? "token"
         : "unknown",
       expires: formatExpiry(e.expirationTime),
       verified:
