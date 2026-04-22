@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Claude Code plugins for practical developer workflows from the wrangler-accounts author.",
-    "version": "1.5.1"
+    "version": "1.6.5"
   },
   "plugins": [
     {
       "name": "wrangler-accounts",
       "source": "./plugins/wrangler-accounts",
       "description": "Cloudflare Wrangler multi-account skill plus a Bash hook that blocks raw wrangler calls when local profiles are configured.",
-      "version": "1.5.1",
+      "version": "1.6.5",
       "author": {
         "name": "Lee Guo"
       },

@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
+const PACKAGE_JSON = path.join(ROOT, 'package.json');
 const PLUGIN_JSON = path.join(ROOT, 'plugins', 'wrangler-accounts', '.claude-plugin', 'plugin.json');
 const MARKETPLACE_JSON = path.join(ROOT, '.claude-plugin', 'marketplace.json');
 const HOOKS_JSON = path.join(ROOT, 'plugins', 'wrangler-accounts', 'hooks', 'hooks.json');
@@ -79,10 +80,11 @@ function runGuard(command, { bypass = false } = {}) {
 }
 
 test('plugin.json parses and exposes required fields', () => {
+  const pkg = readJson(PACKAGE_JSON);
   const plugin = readJson(PLUGIN_JSON);
   assert.equal(plugin.name, 'wrangler-accounts');
   assert.equal(typeof plugin.description, 'string');
-  assert.equal(plugin.version, '1.5.1');
+  assert.equal(plugin.version, pkg.version);
 });
 
 test('marketplace.json parses and exposes required fields', () => {
