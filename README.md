@@ -204,8 +204,6 @@ CLOUDFLARE_API_TOKEN=xxx CLOUDFLARE_ACCOUNT_ID=yyy wrangler-accounts deploy
     --plain             Plain output for list (one name per line)
     --include-backups   Include backup profiles in list/status
 -f, --force             Overwrite existing profile on save
-    --backup            Backup current config on use (default)
-    --no-backup         Disable backup on use
     --unset             With 'default': clear the persistent default
     --deep, --verify    With 'list': run wrangler whoami per profile for live verification
     --older-than <dur>  With 'gc': age threshold (e.g. 1h, 30m, 7d)
@@ -250,7 +248,7 @@ Inside an isolated session, these are automatically set for the child process:
 ## Breaking changes in 1.0
 
 - **`-p` is now `--profile`** (was `--profiles` in 0.1.x). Use the long form `--profiles <path>` to specify the profiles directory.
-- **`use` is deprecated**. It still works but prints a deprecation warning on stderr. Use `default <name>` for persistence or `--profile <name>` for one-shot execution.
+- **`use` is no longer supported**. The command now exits with migration guidance. Use `default <name>` for persistence or `--profile <name>` for one-shot execution.
 - **`sync-active` is deprecated**, replaced by `sync-default`. The alias still works with a warning.
 - Profile names matching management subcommand names (`exec`, `default`, `whoami`, `gc`, `login`, `list`, `status`, `save`, `sync`, `sync-default`, `remove`, `use`, `sync-active`) cannot be reached via positional shorthand. Use `--profile <name>` instead.
 - First-time setup of a new profile via `wrangler-accounts login <name>` no longer touches your real `~/.wrangler/config/default.toml`. All credential writes go directly into the profile directory.
@@ -273,7 +271,7 @@ The profiles directory defaults to:
 
 - Profile names accept only letters, numbers, dot, underscore, and dash.
 - Saved OAuth sessions can expire. If a profile is expired, running it will stop and tell you to run `wrangler-accounts login <name>` again.
-- Backups from the deprecated `use` command are hidden from `list` and `status` unless you pass `--include-backups`.
+- Legacy backups created by older `use` flows are hidden from `list` and `status` unless you pass `--include-backups`.
 
 ## FAQ
 

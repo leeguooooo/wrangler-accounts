@@ -36,15 +36,17 @@ function run(args, { profilesDir, configPath, extraEnv = {} } = {}) {
   return spawnSync(process.execPath, fullArgs, { encoding: 'utf8', env });
 }
 
-test('use <profile> still works and emits deprecation warning', () => {
+test('use <profile> exits with migration guidance instead of switching profiles', () => {
   const profilesDir = mkStore();
   addProfile(profilesDir, 'work');
   const configPath = makeCfg();
   const r = run(['use', 'work'], { profilesDir, configPath });
-  assert.equal(r.status, 0, `stderr=${r.stderr}`);
-  assert.match(r.stderr, /deprecated/i);
-  // the existing use behavior writes the active file
-  assert.equal(fs.readFileSync(path.join(profilesDir, 'active'), 'utf8').trim(), 'work');
+  assert.equal(r.status, 2, `stderr=${r.stderr}`);
+  assert.match(r.stderr, /no longer supported/i);
+  assert.match(r.stderr, /default <name>/i);
+  assert.match(r.stderr, /--profile <name>/i);
+  assert.equal(fs.existsSync(path.join(profilesDir, 'active')), false);
+  assert.equal(fs.readFileSync(configPath, 'utf8'), 'oauth_token = "current"\n');
 });
 
 test('sync-active is a deprecated alias for sync-default', () => {

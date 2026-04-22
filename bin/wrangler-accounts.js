@@ -26,13 +26,11 @@ const {
   filesEqual,
   writeMeta,
   readMeta,
-  setActiveProfile,
   getActiveProfile,
   getDefaultProfile,
   setDefaultProfile,
   unsetDefaultProfile,
   timestampForFile,
-  backupCurrentConfig,
   findMatchingProfile,
   saveProfile: saveProfileImpl,
   saveTokenProfile: saveTokenProfileImpl,
@@ -316,8 +314,14 @@ Commands:
   token-add <name> <api-token> <account-id>
   sync <name>
   sync-active
-  use <name>
+  sync-default
+  default [name | --unset]
+  whoami [--profile <name>]
+  exec <name> [-- <cmd> [args]]
   remove <name>
+
+Deprecated:
+  use <name>              Prints migration guidance; use 'default' or '--profile' instead
 
 Options:
   -c, --config <path>     Wrangler config path
@@ -326,8 +330,6 @@ Options:
   --plain                 Plain output for list (one name per line)
   --include-backups       Include backup profiles in list/status
   -f, --force             Overwrite existing profile on save
-  --backup                Backup current config on use (default)
-  --no-backup             Disable backup on use
   -h, --help              Show help
   -v, --version           Print version
 
@@ -338,8 +340,8 @@ Env:
 
 Examples:
   wrangler-accounts save work
-  wrangler-accounts sync-active
-  wrangler-accounts use personal
+  wrangler-accounts default work
+  wrangler-accounts --profile work deploy
 `;
   console.log(text);
   process.exit(exitCode);
@@ -349,7 +351,6 @@ function parseArgs(argv) {
   const opts = {
     json: false,
     force: false,
-    backup: true,
     includeBackups: false,
   };
   const rest = [];
@@ -400,10 +401,6 @@ function parseArgs(argv) {
       opts.includeBackups = true;
     } else if (arg === "--force" || arg === "-f") {
       opts.force = true;
-    } else if (arg === "--backup") {
-      opts.backup = true;
-    } else if (arg === "--no-backup") {
-      opts.backup = false;
     } else if (arg === "--unset") {
       opts.unset = true;
     } else if (arg === "--deep" || arg === "--verify") {
@@ -449,36 +446,6 @@ function runWranglerLogin() {
   if (result.status !== 0) {
     die(`'wrangler login' exited with code ${result.status}`);
   }
-}
-
-function useProfile(name, configPath, profilesDir, backup) {
-  if (!isValidName(name)) {
-    die(`Invalid profile name: ${name}`);
-  }
-
-  const profileDir = path.join(profilesDir, name);
-  const profileConfig = path.join(profileDir, "config.toml");
-  if (!fs.existsSync(profileConfig)) {
-    die(`Profile not found: ${name}`);
-  }
-
-  const session = readSessionState(profileConfig);
-  if (session.effective === 'expired') {
-    die(
-      `Profile '${name}' has expired Wrangler OAuth credentials and no refresh_token to renew them (expiration_time: ${session.expirationTime}). Run 'wrangler-accounts login ${name}' to re-authenticate.`
-    );
-  }
-
-  let backupName = null;
-  if (backup && fs.existsSync(configPath) && !filesEqual(configPath, profileConfig)) {
-    backupName = backupCurrentConfig(configPath, profilesDir);
-  }
-
-  ensureDir(path.dirname(configPath));
-  fs.copyFileSync(profileConfig, configPath);
-  setActiveProfile(profilesDir, name);
-
-  return backupName;
 }
 
 function syncProfile(name, configPath, profilesDir, identity) {
@@ -1147,33 +1114,15 @@ function main() {
   }
 
   if (command === "use") {
-    warnDeprecated(
-      "use",
-      "default <name> (for persistence) or --profile <name> (for one-shot)",
+    die(
+      [
+        "The 'use' command is no longer supported because it was ambiguous and rewrote Wrangler's global config.",
+        "Use 'wrangler-accounts default <name>' for a persistent default profile.",
+        "Use 'wrangler-accounts --profile <name> <wrangler-args...>' for a one-shot command.",
+        "Use 'wrangler-accounts exec <name>' for an interactive subshell.",
+      ].join("\n"),
+      2,
     );
-    const name = rest[1];
-    if (!name) die("Missing profile name for use");
-    ensureDir(profilesDir);
-    const backupName = useProfile(name, configPath, profilesDir, opts.backup);
-    const backupNote = backupName ? ` (backup: ${backupName})` : "";
-    if (opts.json) {
-      console.log(
-        JSON.stringify(
-          {
-            command: "use",
-            name,
-            configPath,
-            profilesDir,
-            backupName,
-          },
-          null,
-          2
-        )
-      );
-    } else {
-      console.log(`Switched to profile '${name}'${backupNote}`);
-    }
-    return;
   }
 
   if (command === "remove") {

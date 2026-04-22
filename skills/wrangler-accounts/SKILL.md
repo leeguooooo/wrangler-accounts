@@ -380,12 +380,13 @@ cd "$WRANGLER_ACCOUNT_REAL_HOME"
 
 Or users can add a shell alias: `alias realhome='cd "$WRANGLER_ACCOUNT_REAL_HOME"'`.
 
-### Deprecated `use` command warning
+### Unsupported `use` command migration
 
-`wrangler-accounts use <name>` still works but prints a deprecation warning. Suggest the replacement based on intent:
+`wrangler-accounts use <name>` no longer switches profiles. It exits with migration guidance because the old behavior was ambiguous and rewrote Wrangler's global config. Suggest the replacement based on intent:
 
 - "I want this account to stick for a while" → `wrangler-accounts default <name>`
 - "Just this one command" → `wrangler-accounts --profile <name> <wrangler-args>`
+- "I want an interactive shell on that account" → `wrangler-accounts exec <name>`
 
 ### `[ERROR] A request to the Cloudflare API ... Authentication error [code: 10000]` with `code: 7403` ("not authorized to access this service")
 
@@ -510,5 +511,5 @@ Profile names: letters, numbers, dot, underscore, dash only. Names matching mana
 
 ## Deprecated
 
-- `wrangler-accounts use <name>` — deprecated, prints warning. Use `default <name>` for persistence or `--profile <name>` for one-shot.
+- `wrangler-accounts use <name>` — unsupported compatibility entry; exits with migration guidance. Use `default <name>` for persistence, `--profile <name>` for one-shot commands, or `exec <name>` for an interactive shell.
 - `wrangler-accounts sync-active` — deprecated alias for `sync-default`.
