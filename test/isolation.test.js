@@ -261,6 +261,54 @@ test('REGRESSION: two profiles get separate cache dirs (no account-id leak)', ()
   assert.equal(envB.WRANGLER_CACHE_DIR, path.join(profilesDir, 'B', 'cache'));
 });
 
+test('REGRESSION: inherited Cloudflare credentials do not leak into an OAuth profile', () => {
+  // The KV-wrong-namespace bug: an exported CLOUDFLARE_ACCOUNT_ID (or
+  // CLOUDFLARE_API_TOKEN) in the parent shell silently overrode the
+  // resolved profile's account, so wrangler kept the profile's credential
+  // but routed `kv key put/get --namespace-id` to the LEAKED account.
+  // An OAuth profile passes no apiToken/accountId, so the isolated env must
+  // NOT carry any inherited Cloudflare identity.
+  const env = buildIsolatedEnv({
+    shadow: '/tmp/fake-shadow',
+    realHome: '/Users/fake',
+    profile: 'work',
+    baseEnv: {
+      CLOUDFLARE_ACCOUNT_ID: 'leaked-account',
+      CLOUDFLARE_API_TOKEN: 'leaked-token',
+      CLOUDFLARE_API_KEY: 'leaked-key',
+      CLOUDFLARE_EMAIL: 'leaked@example.com',
+      PATH: '/usr/bin',
+    },
+  });
+
+  assert.equal(env.CLOUDFLARE_ACCOUNT_ID, undefined);
+  assert.equal(env.CLOUDFLARE_API_TOKEN, undefined);
+  assert.equal(env.CLOUDFLARE_API_KEY, undefined);
+  assert.equal(env.CLOUDFLARE_EMAIL, undefined);
+  // Non-Cloudflare env still passes through untouched.
+  assert.equal(env.PATH, '/usr/bin');
+});
+
+test('REGRESSION: a token profile account id overrides an inherited account id', () => {
+  // Even when the parent shell exports a different CLOUDFLARE_ACCOUNT_ID,
+  // the resolved profile's own account/token must be the only identity the
+  // child sees.
+  const env = buildIsolatedEnv({
+    shadow: '/tmp/fake-shadow',
+    realHome: '/Users/fake',
+    profile: 'work',
+    baseEnv: {
+      CLOUDFLARE_ACCOUNT_ID: 'leaked-account',
+      CLOUDFLARE_API_TOKEN: 'leaked-token',
+    },
+    apiToken: 'profile-token',
+    accountId: 'profile-account',
+  });
+
+  assert.equal(env.CLOUDFLARE_ACCOUNT_ID, 'profile-account');
+  assert.equal(env.CLOUDFLARE_API_TOKEN, 'profile-token');
+});
+
 test('runIsolated spawns child with shadow HOME and correct env', () => {
   const realHome = mkFakeRealHome();
   const { profileCfg } = mkProfile();
