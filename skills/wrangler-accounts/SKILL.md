@@ -218,9 +218,20 @@ CLOUDFLARE_API_TOKEN=xxx CLOUDFLARE_ACCOUNT_ID=yyy wrangler-accounts deploy
 
 `wrangler-accounts shim install [--apply]` — installs a `wrangler` shim that, once it's at the front of `PATH`, intercepts every bare `wrangler <args>` call and **blocks it with guidance** (telling the caller to use `wrangler-accounts --profile <name> ...`) whenever profiles are configured. This makes the "use wrangler-accounts instead of raw wrangler" rule apply to **any** caller — Codex, Cursor, a plain terminal, a shell script — not just Claude Code (whose plugin hook already does this at the tool layer).
 
-- `wrangler-accounts shim install` — writes the shim to `~/.wrangler-accounts/shims/` and prints the `export PATH="<shimdir>:$PATH"` line to add to your shell rc.
-- `wrangler-accounts shim install --apply` — also appends that line to your detected shell rc (`~/.zshrc` / `~/.bashrc`), idempotently.
-- `wrangler-accounts shim status` — reports whether the shim is installed and **active** (i.e. ahead of the real `wrangler` on `PATH`). If `status` says installed-but-not-active, the shim dir isn't early enough on `PATH`.
+**IMPORTANT — this is a separate opt-in step.** `npm i -g ...` installs the CLI but does **not** install the shim (it changes `PATH`, so it's never automatic). And after `shim install`, two more things must be true before a bare `wrangler` is actually blocked: (1) the shim dir is **ahead of the real wrangler on PATH**, and (2) at least one **profile is configured**. If a user says "I installed it but `wrangler` isn't being intercepted", run `wrangler-accounts shim status` first — the usual cause is `Active: no` (PATH not updated / shell not restarted).
+
+Full setup (the three steps a user needs):
+
+```bash
+npm i -g github:leeguooooo/wrangler-accounts   # 1. CLI
+wrangler-accounts shim install --apply          # 2. shim + PATH edit (zsh/bash/fish)
+# 3. open a new shell, then:
+wrangler-accounts shim status                   # want: Active (intercepts bare wrangler): yes
+```
+
+- `wrangler-accounts shim install` — writes the shim to `~/.wrangler-accounts/shims/` and prints the exact PATH line **for the user's shell** (`export PATH=...` for zsh/bash, `fish_add_path -p ...` for fish).
+- `wrangler-accounts shim install --apply` — also writes that line into the detected rc file, idempotently: `~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish` (fish is fully supported).
+- `wrangler-accounts shim status` — reports whether the shim is installed and **active** (i.e. ahead of the real `wrangler` on `PATH`). If `status` says installed-but-not-active, the shim dir isn't early enough on `PATH` (tell the user to open a new shell or re-run with `--apply`).
 - `wrangler-accounts shim uninstall [--apply]` — removes the shim (and the rc line with `--apply`).
 
 The shim passes through (runs real `wrangler`) in these cases, so it never gets in the way:

@@ -62,12 +62,21 @@ Then run `/reload-plugins` and confirm only one entry remains.
 
 ## Any agent / any shell: the global `wrangler` shim
 
-The Claude Code plugin hook above only protects Claude Code. To enforce "use `wrangler-accounts` instead of raw `wrangler`" for **every** caller — Codex, Cursor, a plain terminal, a CI-less shell script — install the global shim:
+The Claude Code plugin hook above only protects Claude Code. To enforce "use `wrangler-accounts` instead of raw `wrangler`" for **every** caller — Codex, Cursor, a plain terminal, a CI-less shell script — install the global shim. **This is a separate, opt-in step** — installing the CLI does *not* install the shim (it changes your `PATH`, so it's never automatic):
 
 ```bash
-wrangler-accounts shim install --apply   # writes the shim + adds it to your shell rc PATH
-# then open a new shell, or: export PATH="$HOME/.wrangler-accounts/shims:$PATH"
+# 1. Install the CLI (if you haven't):
+npm i -g github:leeguooooo/wrangler-accounts
+
+# 2. Install the shim and add it to your shell's PATH automatically.
+#    --apply edits the right rc file for zsh / bash / fish:
+wrangler-accounts shim install --apply
+
+# 3. Open a new shell (or run the printed line once in the current one), then verify:
+wrangler-accounts shim status        # want: "Active (intercepts bare wrangler): yes"
 ```
+
+`--apply` writes the correct syntax for your shell — `export PATH="…:$PATH"` for zsh/bash (into `~/.zshrc` / `~/.bashrc`), `fish_add_path -p …` for fish (into `~/.config/fish/config.fish`). If you'd rather edit `PATH` yourself, run `wrangler-accounts shim install` (no `--apply`) and it prints the exact line for your shell.
 
 Once the shim dir is at the front of `PATH`, a bare `wrangler deploy` is blocked with guidance whenever you have profiles configured:
 

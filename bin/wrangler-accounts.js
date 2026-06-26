@@ -60,7 +60,9 @@ const {
   installShim,
   uninstallShim,
   shimStatus,
+  detectShell,
   detectShellRc,
+  pathLine,
   applyToRc,
   removeFromRc,
 } = require("../lib/shim");
@@ -1355,26 +1357,27 @@ function main() {
         die(`Failed to install shim: ${err.message}`);
       }
       const realWrangler = findRealWrangler({ shimDir });
+      const shell = detectShell(process.env);
+      const line = pathLine(shimDir, shell);
       let rcPath = null;
       let rcApplied = false;
       if (opts.apply) {
         rcPath = detectShellRc(process.env);
         if (!rcPath) {
           die(
-            "Could not detect a supported shell rc file for --apply (fish uses different syntax). Add the shim dir to PATH manually.",
+            "Could not detect a shell rc file for --apply. Add the shim dir to PATH manually.",
           );
         }
         try {
-          rcApplied = applyToRc({ rcPath, shimDir });
+          rcApplied = applyToRc({ rcPath, shimDir, shell });
         } catch (err) {
           die(`Failed to update ${rcPath}: ${err.message}`);
         }
       }
-      const exportLine = `export PATH="${shimDir}:$PATH"`;
       if (opts.json) {
         console.log(
           JSON.stringify(
-            { command: "shim", action: "install", shimPath, shimDir, exportLine, realWrangler, rcPath, rcApplied },
+            { command: "shim", action: "install", shimPath, shimDir, shell, pathLine: line, realWrangler, rcPath, rcApplied },
             null,
             2,
           ),
@@ -1388,13 +1391,13 @@ function main() {
         );
       }
       if (rcApplied) {
-        console.log(`Added shim dir to PATH in ${rcPath}. Open a new shell or run:`);
-        console.log(`  ${exportLine}`);
+        console.log(`Added shim dir to PATH in ${rcPath}. Open a new shell, or run now:`);
+        console.log(`  ${line}`);
       } else if (opts.apply) {
         console.log(`${rcPath} already references the shim — no change made.`);
       } else {
-        console.log("Add the shim dir to the FRONT of your PATH, e.g. in ~/.zshrc:");
-        console.log(`  ${exportLine}`);
+        console.log(`Add the shim dir to the FRONT of your PATH (${shell}):`);
+        console.log(`  ${line}`);
         console.log("Or re-run with --apply to edit your shell rc automatically.");
       }
       return;
@@ -1446,7 +1449,7 @@ function main() {
           "\nThe shim is installed but not active — its directory is not ahead of the real",
         );
         console.log("wrangler on PATH. Add it to the front of PATH:");
-        console.log(`  export PATH="${shimDir}:$PATH"`);
+        console.log(`  ${pathLine(shimDir, detectShell(process.env))}`);
       }
       return;
     }

@@ -25,14 +25,18 @@ function run(args, { shimDir, extraEnv = {} } = {}) {
   });
 }
 
-test('shim install writes an executable shim and reports the export line', () => {
+test('shim install writes an executable shim and reports the path line', () => {
   const shimDir = mkTmp('install');
-  const r = run(['shim', 'install', '--json'], { shimDir });
+  const r = run(['shim', 'install', '--json'], {
+    shimDir,
+    extraEnv: { SHELL: '/bin/zsh' },
+  });
   assert.equal(r.status, 0, `stderr=${r.stderr}`);
   const out = JSON.parse(r.stdout);
   assert.equal(out.action, 'install');
   assert.equal(out.shimPath, path.join(shimDir, 'wrangler'));
-  assert.match(out.exportLine, /export PATH=/);
+  assert.equal(out.shell, 'zsh');
+  assert.match(out.pathLine, /export PATH=/);
 
   const stat = fs.statSync(out.shimPath);
   assert.ok(stat.isFile());
@@ -105,14 +109,14 @@ test('findRealWrangler skips the shim dir', () => {
   assert.equal(found, path.join(realDir, 'wrangler'));
 });
 
-test('applyToRc / removeFromRc are idempotent', () => {
+test('applyToRc / removeFromRc are idempotent (zsh export syntax)', () => {
   const rcDir = mkTmp('rc');
   const rcPath = path.join(rcDir, '.zshrc');
   fs.writeFileSync(rcPath, '# existing\nexport FOO=1\n');
   const shimDir = '/tmp/wa-shims';
 
-  assert.equal(shimLib.applyToRc({ rcPath, shimDir }), true);
-  assert.equal(shimLib.applyToRc({ rcPath, shimDir }), false, 'second apply is a no-op');
+  assert.equal(shimLib.applyToRc({ rcPath, shimDir, shell: 'zsh' }), true);
+  assert.equal(shimLib.applyToRc({ rcPath, shimDir, shell: 'zsh' }), false, 'second apply is a no-op');
   const after = fs.readFileSync(rcPath, 'utf8');
   assert.match(after, /export PATH="\/tmp\/wa-shims:\$PATH"/);
   assert.equal((after.match(/wrangler-accounts shim/g) || []).length, 2);
@@ -122,4 +126,26 @@ test('applyToRc / removeFromRc are idempotent', () => {
   assert.doesNotMatch(cleaned, /wrangler-accounts shim/);
   assert.match(cleaned, /export FOO=1/);
   assert.equal(shimLib.removeFromRc({ rcPath }), false, 'second remove is a no-op');
+});
+
+test('applyToRc uses fish_add_path syntax for fish and removeFromRc strips it', () => {
+  const rcDir = mkTmp('rc-fish');
+  const rcPath = path.join(rcDir, 'config.fish');
+  const shimDir = '/tmp/wa-shims';
+
+  assert.equal(shimLib.applyToRc({ rcPath, shimDir, shell: 'fish' }), true);
+  const after = fs.readFileSync(rcPath, 'utf8');
+  assert.match(after, /fish_add_path -p \/tmp\/wa-shims/);
+  assert.doesNotMatch(after, /export PATH=/);
+
+  assert.equal(shimLib.removeFromRc({ rcPath }), true);
+  assert.doesNotMatch(fs.readFileSync(rcPath, 'utf8'), /wrangler-accounts shim/);
+});
+
+test('detectShell + detectShellRc resolve fish to config.fish', () => {
+  const fakeHome = mkTmp('home');
+  const env = { SHELL: '/usr/local/bin/fish', XDG_CONFIG_HOME: fakeHome };
+  assert.equal(shimLib.detectShell(env), 'fish');
+  assert.equal(shimLib.detectShellRc(env), path.join(fakeHome, 'fish', 'config.fish'));
+  assert.equal(shimLib.pathLine('/x/shims', 'fish'), 'fish_add_path -p /x/shims');
 });
