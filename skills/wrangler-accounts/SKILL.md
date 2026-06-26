@@ -214,6 +214,25 @@ CLOUDFLARE_API_TOKEN=xxx CLOUDFLARE_ACCOUNT_ID=yyy wrangler-accounts deploy
 
 `wrangler-accounts gc [--older-than 1h]` — removes `wa-*` directories under `$TMPDIR` older than the threshold (default 1h). Safe to run at any time.
 
+### Install the global `wrangler` shim (enforce isolation for any caller)
+
+`wrangler-accounts shim install [--apply]` — installs a `wrangler` shim that, once it's at the front of `PATH`, intercepts every bare `wrangler <args>` call and **blocks it with guidance** (telling the caller to use `wrangler-accounts --profile <name> ...`) whenever profiles are configured. This makes the "use wrangler-accounts instead of raw wrangler" rule apply to **any** caller — Codex, Cursor, a plain terminal, a shell script — not just Claude Code (whose plugin hook already does this at the tool layer).
+
+- `wrangler-accounts shim install` — writes the shim to `~/.wrangler-accounts/shims/` and prints the `export PATH="<shimdir>:$PATH"` line to add to your shell rc.
+- `wrangler-accounts shim install --apply` — also appends that line to your detected shell rc (`~/.zshrc` / `~/.bashrc`), idempotently.
+- `wrangler-accounts shim status` — reports whether the shim is installed and **active** (i.e. ahead of the real `wrangler` on `PATH`). If `status` says installed-but-not-active, the shim dir isn't early enough on `PATH`.
+- `wrangler-accounts shim uninstall [--apply]` — removes the shim (and the rc line with `--apply`).
+
+The shim passes through (runs real `wrangler`) in these cases, so it never gets in the way:
+- `WA_PASSTHROUGH=1 wrangler <args>` (explicit one-off escape; `NOWRANGLER_ACCOUNTS_GUARD=1` also honored)
+- account-agnostic commands: `wrangler --version` / `--help`
+- when no profiles are configured, or `wrangler-accounts` isn't installed
+- inside `wrangler-accounts exec` / any wrangler-accounts-spawned subprocess (already isolated)
+
+**Limitation:** `npx wrangler` / `pnpm wrangler` / `./node_modules/.bin/wrangler` resolve a project-local binary that a `PATH` shim cannot shadow — same gap the Claude Code hook already exempts. The shim covers globally-invoked `wrangler` only.
+
+> The shim and the Claude Code plugin hook are complementary: the hook fires earlier (Claude's tool layer, gives the model `exit 2` feedback); the shim enforces the same rule at the exec layer for every other agent and shell. Both can be installed at once.
+
 ## Common Recipes
 
 These are the patterns the user is most likely asking about when they mention "Cloudflare accounts", "wrangler", or "multi-account deploys". Pick the one that matches intent.

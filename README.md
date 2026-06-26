@@ -60,6 +60,40 @@ npx skills remove wrangler-accounts
 
 Then run `/reload-plugins` and confirm only one entry remains.
 
+## Any agent / any shell: the global `wrangler` shim
+
+The Claude Code plugin hook above only protects Claude Code. To enforce "use `wrangler-accounts` instead of raw `wrangler`" for **every** caller — Codex, Cursor, a plain terminal, a CI-less shell script — install the global shim:
+
+```bash
+wrangler-accounts shim install --apply   # writes the shim + adds it to your shell rc PATH
+# then open a new shell, or: export PATH="$HOME/.wrangler-accounts/shims:$PATH"
+```
+
+Once the shim dir is at the front of `PATH`, a bare `wrangler deploy` is blocked with guidance whenever you have profiles configured:
+
+```text
+$ wrangler deploy
+wrangler-accounts: direct `wrangler` is blocked.
+...
+  wrangler-accounts deploy                 # runs under default profile 'work'
+  wrangler-accounts --profile <name> deploy
+Profiles on this machine:
+  - work
+  - personal
+To force raw wrangler this once: WA_PASSTHROUGH=1 wrangler deploy
+```
+
+Check it's active with `wrangler-accounts shim status` (reports whether the shim dir is ahead of the real `wrangler` on `PATH`). Remove it with `wrangler-accounts shim uninstall --apply`.
+
+The shim **passes through to real `wrangler`** so it never gets in your way:
+
+- `WA_PASSTHROUGH=1 wrangler ...` (one-off escape; the hook's `NOWRANGLER_ACCOUNTS_GUARD=1` is also honored)
+- `wrangler --version` / `--help` (account-agnostic)
+- when no profiles are configured
+- inside `wrangler-accounts exec` and any wrangler-accounts-spawned subprocess (already isolated)
+
+**Limitation:** `npx wrangler` / `pnpm wrangler` / `./node_modules/.bin/wrangler` run a project-local binary that a `PATH` shim can't shadow. The shim covers globally-invoked `wrangler`. The shim and the Claude Code hook are complementary and can both be installed.
+
 ## What it does
 
 Every execution runs `wrangler` inside a per-invocation **shadow HOME** — a temporary directory that mirrors most of your real home, except `.wrangler/config/default.toml` is a symlink pointing at the saved profile's config. Token refreshes flow back to the profile automatically. Nothing touches your real `~/.wrangler`. Two parallel invocations get two independent shadow HOMEs.
@@ -124,6 +158,9 @@ wrangler-accounts sync <name>                   # refresh a profile from current
 wrangler-accounts sync-default                  # refresh the default profile
 wrangler-accounts remove <name>
 wrangler-accounts gc [--older-than 1h]          # clean stale shadow HOMEs
+wrangler-accounts shim install [--apply]        # global wrangler shim (any shell/agent)
+wrangler-accounts shim status
+wrangler-accounts shim uninstall [--apply]
 -v, --version                                   # print version
 ```
 
@@ -216,6 +253,8 @@ CLOUDFLARE_API_TOKEN=xxx CLOUDFLARE_ACCOUNT_ID=yyy wrangler-accounts deploy
 - `WRANGLER_PROFILE` — profile to use when no `--profile` flag is given
 - `WRANGLER_CONFIG_PATH` — Wrangler config path override
 - `WRANGLER_ACCOUNTS_DIR` — profiles directory override
+- `WRANGLER_ACCOUNTS_SHIM_DIR` — where `shim install` writes the `wrangler` shim (default `~/.wrangler-accounts/shims`)
+- `WA_PASSTHROUGH=1` — bypass the global `wrangler` shim for one command (`NOWRANGLER_ACCOUNTS_GUARD=1` also works)
 - `XDG_CONFIG_HOME` — fallback base for the profiles directory
 
 Inside an isolated session, these are automatically set for the child process:

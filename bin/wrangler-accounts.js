@@ -54,6 +54,16 @@ const {
   buildIsolatedEnv,
   cleanupShadow,
 } = require("../lib/isolation");
+const {
+  getShimDir,
+  findRealWrangler,
+  installShim,
+  uninstallShim,
+  shimStatus,
+  detectShellRc,
+  applyToRc,
+  removeFromRc,
+} = require("../lib/shim");
 
 const MANAGEMENT_SUBCOMMANDS = new Set([
   "list",
@@ -71,6 +81,7 @@ const MANAGEMENT_SUBCOMMANDS = new Set([
   "gc",
   "use",
   "exec",
+  "shim",
 ]);
 
 function findCloudflared() {
@@ -318,6 +329,7 @@ Commands:
   default [name | --unset]
   whoami [--profile <name>]
   exec <name> [-- <cmd> [args]]
+  shim [install | uninstall | status] [--apply]
   remove <name>
 
 Deprecated:
@@ -336,12 +348,14 @@ Options:
 Env:
   WRANGLER_CONFIG_PATH
   WRANGLER_ACCOUNTS_DIR
+  WRANGLER_ACCOUNTS_SHIM_DIR
   XDG_CONFIG_HOME
 
 Examples:
   wrangler-accounts save work
   wrangler-accounts default work
   wrangler-accounts --profile work deploy
+  wrangler-accounts shim install --apply
 `;
   console.log(text);
   process.exit(exitCode);
@@ -403,6 +417,8 @@ function parseArgs(argv) {
       opts.force = true;
     } else if (arg === "--unset") {
       opts.unset = true;
+    } else if (arg === "--apply") {
+      opts.apply = true;
     } else if (arg === "--deep" || arg === "--verify") {
       opts.deep = true;
     } else if (arg === "--config" || arg === "-c") {
@@ -439,7 +455,10 @@ function parseArgs(argv) {
 }
 
 function runWranglerLogin() {
-  const result = spawnSync("wrangler", ["login"], { stdio: "inherit" });
+  const result = spawnSync("wrangler", ["login"], {
+    stdio: "inherit",
+    env: { ...process.env, WA_PASSTHROUGH: "1" },
+  });
   if (result.error) {
     die(`Failed to run 'wrangler login': ${result.error.message}`);
   }
@@ -1322,6 +1341,117 @@ function main() {
       console.log(`Default profile set to '${name}'`);
     }
     return;
+  }
+
+  if (command === "shim") {
+    const action = rest[1] || "status";
+    const shimDir = getShimDir(process.env);
+
+    if (action === "install") {
+      let shimPath;
+      try {
+        shimPath = installShim({ shimDir });
+      } catch (err) {
+        die(`Failed to install shim: ${err.message}`);
+      }
+      const realWrangler = findRealWrangler({ shimDir });
+      let rcPath = null;
+      let rcApplied = false;
+      if (opts.apply) {
+        rcPath = detectShellRc(process.env);
+        if (!rcPath) {
+          die(
+            "Could not detect a supported shell rc file for --apply (fish uses different syntax). Add the shim dir to PATH manually.",
+          );
+        }
+        try {
+          rcApplied = applyToRc({ rcPath, shimDir });
+        } catch (err) {
+          die(`Failed to update ${rcPath}: ${err.message}`);
+        }
+      }
+      const exportLine = `export PATH="${shimDir}:$PATH"`;
+      if (opts.json) {
+        console.log(
+          JSON.stringify(
+            { command: "shim", action: "install", shimPath, shimDir, exportLine, realWrangler, rcPath, rcApplied },
+            null,
+            2,
+          ),
+        );
+        return;
+      }
+      console.log(`Installed wrangler shim: ${shimPath}`);
+      if (!realWrangler) {
+        console.log(
+          "Warning: no real 'wrangler' found on PATH yet. Install it with 'npm i -g wrangler'.",
+        );
+      }
+      if (rcApplied) {
+        console.log(`Added shim dir to PATH in ${rcPath}. Open a new shell or run:`);
+        console.log(`  ${exportLine}`);
+      } else if (opts.apply) {
+        console.log(`${rcPath} already references the shim — no change made.`);
+      } else {
+        console.log("Add the shim dir to the FRONT of your PATH, e.g. in ~/.zshrc:");
+        console.log(`  ${exportLine}`);
+        console.log("Or re-run with --apply to edit your shell rc automatically.");
+      }
+      return;
+    }
+
+    if (action === "uninstall") {
+      const removed = uninstallShim({ shimDir });
+      let rcPath = null;
+      let rcCleaned = false;
+      if (opts.apply) {
+        rcPath = detectShellRc(process.env);
+        if (rcPath) {
+          try {
+            rcCleaned = removeFromRc({ rcPath });
+          } catch (err) {
+            die(`Failed to update ${rcPath}: ${err.message}`);
+          }
+        }
+      }
+      if (opts.json) {
+        console.log(
+          JSON.stringify(
+            { command: "shim", action: "uninstall", shimDir, removed, rcPath, rcCleaned },
+            null,
+            2,
+          ),
+        );
+        return;
+      }
+      console.log(removed ? `Removed wrangler shim from ${shimDir}` : "No wrangler shim was installed.");
+      if (rcCleaned) {
+        console.log(`Removed shim PATH entry from ${rcPath}. Open a new shell for it to take effect.`);
+      }
+      return;
+    }
+
+    if (action === "status") {
+      const status = shimStatus({ shimDir });
+      if (opts.json) {
+        console.log(JSON.stringify({ command: "shim", action: "status", ...status }, null, 2));
+        return;
+      }
+      console.log(`Shim installed: ${status.installed ? "yes" : "no"} (${status.shimPath})`);
+      console.log(`Shim dir on PATH: ${status.onPath ? "yes" : "no"}`);
+      console.log(`Active (intercepts bare wrangler): ${status.active ? "yes" : "no"}`);
+      console.log(`Real wrangler: ${status.realWrangler || "(none found)"}`);
+      if (status.installed && !status.active) {
+        console.log(
+          "\nThe shim is installed but not active — its directory is not ahead of the real",
+        );
+        console.log("wrangler on PATH. Add it to the front of PATH:");
+        console.log(`  export PATH="${shimDir}:$PATH"`);
+      }
+      return;
+    }
+
+    die(`Unknown shim action: ${action}. Use install, uninstall, or status.`, 2);
   }
 
   die(`Unknown command: ${command}`);
