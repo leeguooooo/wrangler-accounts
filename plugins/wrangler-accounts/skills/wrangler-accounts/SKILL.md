@@ -21,7 +21,7 @@ For Claude Code users, prefer the plugin marketplace install path because it shi
 The plugin does **not** replace the CLI binary. The actual `wrangler-accounts` executable still must be installed on `PATH`:
 
 ```bash
-npm i -g @leeguoo/wrangler-accounts
+npm i -g github:leeguooooo/wrangler-accounts
 ```
 
 Non-Claude-Code users can keep using the `skills.sh` distribution path for this same `SKILL.md` mirror:
@@ -48,7 +48,7 @@ command -v wrangler-accounts && wrangler-accounts --version
 If the command is missing, tell the user to install the CLI first:
 
 ```bash
-npm i -g @leeguoo/wrangler-accounts
+npm i -g github:leeguooooo/wrangler-accounts
 ```
 
 `wrangler` itself (the Cloudflare CLI) must also be on `PATH`. If missing:
@@ -69,7 +69,7 @@ If `wrangler-accounts --version` is below any of these, **upgrade first** before
 | **≥ 1.6.0** | API token profiles (`token-add`) + anonymous env-var pass-through | only OAuth profiles existed; `CLOUDFLARE_API_TOKEN` in env still required a named profile to be selected |
 
 ```bash
-npm i -g @leeguoo/wrangler-accounts@latest    # always-safe upgrade
+npm i -g github:leeguooooo/wrangler-accounts    # reinstall from main = latest
 ```
 
 ## Triage flow — when something looks wrong

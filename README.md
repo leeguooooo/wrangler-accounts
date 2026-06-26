@@ -31,10 +31,10 @@ Install the marketplace and plugin first:
 
 The plugin bundles the `wrangler-accounts` skill plus a Bash `PreToolUse` hook, so Claude Code can learn the workflow and block raw `wrangler` calls before they bypass your local profile isolation. No manual `settings.json` editing is required.
 
-The plugin does **not** install the CLI binary. Keep the npm package on your `PATH`:
+The plugin does **not** install the CLI binary. Keep the CLI on your `PATH` (installed straight from GitHub — no npm registry, no token):
 
 ```bash
-npm i -g @leeguoo/wrangler-accounts
+npm i -g github:leeguooooo/wrangler-accounts
 ```
 
 The guard only blocks direct `wrangler ...` Bash commands when all of these are true:
@@ -104,7 +104,7 @@ If you do **not** use Claude Code plugins, install the CLI binary and the mirror
 
 ```bash
 # 1. The CLI (always required)
-npm i -g @leeguoo/wrangler-accounts
+npm i -g github:leeguooooo/wrangler-accounts
 
 # 2. The AI agent skill mirror (recommended if you use Cursor / Codex / Gemini CLI / etc.)
 npx skills add leeguooooo/wrangler-accounts -g -y
@@ -116,7 +116,7 @@ The CLI works standalone — you can skip step 2 if you don't use an AI coding a
 
 | | Installs | For |
 |---|---|---|
-| `npm i -g @leeguoo/wrangler-accounts` | The `wrangler-accounts` executable onto your `PATH` | Your shell |
+| `npm i -g github:leeguooooo/wrangler-accounts` | The `wrangler-accounts` executable onto your `PATH` | Your shell |
 | `npx skills add leeguooooo/wrangler-accounts` | `SKILL.md` (markdown) into your AI agent's skills directory | Your AI agent to read |
 
 The AI will tell you to run commands like `wrangler-accounts --profile work deploy`; without step 1 those commands fail with "command not found".
@@ -319,7 +319,7 @@ The profiles directory defaults to:
 `wrangler` itself only supports one OAuth login at a time — running `wrangler login` overwrites `~/.wrangler/config/default.toml`, forcing you to re-login every time you switch accounts. `wrangler-accounts` saves each login as a named profile and runs `wrangler` inside a per-invocation **shadow HOME**, so different shells can use different Cloudflare accounts in parallel.
 
 ```bash
-npm i -g @leeguoo/wrangler-accounts
+npm i -g github:leeguooooo/wrangler-accounts
 wrangler-accounts login work
 wrangler-accounts login personal
 wrangler-accounts --profile work deploy
