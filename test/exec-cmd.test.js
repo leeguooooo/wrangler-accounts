@@ -90,3 +90,45 @@ test('exec work -- (with no command after) errors', () => {
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /No command given/);
 });
+
+test('REGRESSION: an OAuth profile exports its own CLOUDFLARE_ACCOUNT_ID (#1)', () => {
+  // `wrangler d1 create` and other account-scoped commands need an explicit
+  // account id; an OAuth token alone is not enough. Without this the isolated
+  // child had no CLOUDFLARE_ACCOUNT_ID at all (buildIsolatedEnv strips the
+  // inherited one), so wrangler fell through to the project config — which in
+  // #1 held a literal `YOUR_CLOUDFLARE_ACCOUNT_ID` placeholder and produced
+  // `Could not route to /client/v4/accounts/YOUR_CLOUDFLARE_ACCOUNT_ID/...`.
+  const dir = mkStore();
+  addProfile(dir, 'work');
+  fs.writeFileSync(
+    path.join(dir, 'work', 'meta.json'),
+    JSON.stringify({
+      name: 'work',
+      identity: { email: 'me@example.com', accountId: 'abc123def456' },
+    }),
+  );
+
+  const r = run(
+    ['exec', 'work', '--', 'sh', '-c', 'echo $CLOUDFLARE_ACCOUNT_ID'],
+    dir,
+    // Even with a different account leaking in from the parent shell, the
+    // profile's own account must win.
+    { CLOUDFLARE_ACCOUNT_ID: 'leaked-account' },
+  );
+  assert.equal(r.status, 0, `stderr=${r.stderr}`);
+  assert.equal(r.stdout.trim(), 'abc123def456');
+});
+
+test('an OAuth profile with no recorded account id exports nothing', () => {
+  // No meta.json identity means we have no account to assert. Staying silent
+  // keeps wrangler's own account selection intact rather than guessing.
+  const dir = mkStore();
+  addProfile(dir, 'work');
+  const r = run(
+    ['exec', 'work', '--', 'sh', '-c', 'echo "[$CLOUDFLARE_ACCOUNT_ID]"'],
+    dir,
+    { CLOUDFLARE_ACCOUNT_ID: 'leaked-account' },
+  );
+  assert.equal(r.status, 0, `stderr=${r.stderr}`);
+  assert.equal(r.stdout.trim(), '[]');
+});

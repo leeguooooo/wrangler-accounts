@@ -300,6 +300,15 @@ function runResolvedProfileCommand({
     );
   }
 
+  // Account-scoped commands (`d1 create`, `r2`, `kv`, ...) need an explicit
+  // account id; an OAuth token alone is not enough. buildEnv() deliberately
+  // strips any inherited CLOUDFLARE_ACCOUNT_ID, so unless we put the profile's
+  // own account back, wrangler falls through to whatever the project config
+  // says — including a literal `YOUR_CLOUDFLARE_ACCOUNT_ID` placeholder — or
+  // stops to ask interactively, which fails outright under an agent or CI.
+  // The id is the one recorded at login time and shown by `list --deep`.
+  const oauthAccountId = getMetaIdentity(readMeta(profileDir))?.accountId || null;
+
   return runIsolated({
     profile: resolved.name,
     profileCfg,
@@ -307,6 +316,7 @@ function runResolvedProfileCommand({
     realHome: os.homedir(),
     command,
     args,
+    accountId: oauthAccountId,
     baseEnv: process.env,
     captureStdout,
     cloudflaredPath: findCloudflared(),
