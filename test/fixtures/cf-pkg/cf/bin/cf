@@ -1,0 +1,12 @@
+#!/usr/bin/env node
+// Fake Cloudflare cf: report argv and the credential env it received.
+const e = process.env;
+console.log(JSON.stringify({
+  tool: 'cloudflare-cf',
+  argv: process.argv.slice(2),
+  env: {
+    CLOUDFLARE_API_TOKEN: e.CLOUDFLARE_API_TOKEN ?? null,
+    CLOUDFLARE_ACCOUNT_ID: e.CLOUDFLARE_ACCOUNT_ID ?? null,
+    CLOUDFLARE_AUTH_USE_KEYRING: e.CLOUDFLARE_AUTH_USE_KEYRING ?? null,
+  },
+}));

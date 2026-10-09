@@ -21,6 +21,7 @@ const path = require('node:path');
 
 const CLI = path.join(__dirname, '..', 'bin', 'wrangler-accounts.js');
 const FAKE_BIN = path.join(__dirname, 'fixtures', 'contract-bin');
+const NATIVE_BIN = path.join(__dirname, 'fixtures', 'native-bin');
 const SNAPSHOT = path.join(__dirname, 'fixtures', 'contract-snapshot.json');
 
 const OAUTH_TOML = [
@@ -159,16 +160,31 @@ const CASES = [
   ['list-final', ['list', '--json']],
 ];
 
-function runAll() {
+function runAll({ nativeMode = false } = {}) {
   const ctx = setup();
+  if (nativeMode) {
+    // Same fixture, but wrangler supports native profiles and every OAuth
+    // profile has been migrated into wrangler's own store first.
+    ctx.env.PATH = `${NATIVE_BIN}${path.delimiter}${process.env.PATH}`;
+    ctx.env.WA_FAKE_CONTRACT = '1';
+    const m = spawnSync(process.execPath, [CLI, 'migrate', '--all', '--no-verify', '--json'], {
+      encoding: 'utf8',
+      env: ctx.env,
+      cwd: ctx.root,
+    });
+    const migrated = JSON.parse(m.stdout).results.filter((r) => r.status === 'migrated').map((r) => r.name);
+    assert.deepEqual(migrated.sort(), ['stale', 'work'], m.stderr);
+  }
   const results = {};
   for (const [label, args, opts = {}] of CASES) {
+    const started = Date.now();
     const r = spawnSync(process.execPath, [CLI, ...args], {
       encoding: 'utf8',
       env: ctx.env,
       cwd: ctx.root,
       input: '',
     });
+    if (process.env.WA_CONTRACT_TIMING) process.stderr.write(`${nativeMode ? 'native' : 'shadow'} ${label} ${Date.now() - started}ms\n`);
     const stdout = normalize(r.stdout, ctx);
     const stderr = normalize(r.stderr, ctx);
     const entry = { exitCode: r.status };
@@ -220,6 +236,7 @@ function subsetDiff(expected, actual, where, diffs, { lines = false } = {}) {
       return;
     }
     for (const [k, v] of Object.entries(expected)) {
+      if (k.startsWith('_')) continue; // annotations such as _note
       if (!(k in actual)) {
         diffs.push(`${where}.${k}: missing`);
         continue;
@@ -247,4 +264,39 @@ test('every 1.8.0 command result is still produced (subset contract)', () => {
     subsetDiff(expected, results[label], label, diffs);
   }
   assert.deepEqual(diffs, [], `contract drift:\n${diffs.join('\n')}`);
+});
+
+// Differences that are the point of the native backend (documented in
+// docs/superpowers/specs/2026-10-09-native-profiles-design.md). Anything else
+// that drifts for migrated profiles fails the test.
+const NATIVE_ALLOWED = [
+  // native runs keep the real HOME (wrangler finds the profile via --profile)
+  /^run-(default|profile-after)\.json\.homeIsReal: false != true$/,
+  // the list/status text marks native profiles: "[oauth]" -> "[oauth, native]"
+  // (which also widens the NAME column of the table header)
+  /^(list-text|status-text|list-final|list-after-protect)\b.*\[oauth\]/,
+  /^list-text\.stdoutLines: missing line "  NAME +STATUS/,
+  // the fixture's fake wrangler lives in another directory
+  /^shim-status-json\.json\.realWrangler: /,
+  // sync into a native profile keeps the profile note (1.8.0 shadow sync drops it)
+  /^list-final\.json\[\d\]\.description: null != "main account"$/,
+  // `protect stale` now really encrypts the (migrated) OAuth profile
+  /^(list-after-protect|list-final)\.json\[\d\]\.(status|credentialStore|expirationTime|hasRefreshToken): /,
+  // credentials in wrangler's store: stale's expired session lives in the
+  // native file; deep check / expired guard behave as for shadow (exit 3)
+];
+
+test('native backend: the same commands still work for migrated OAuth profiles', () => {
+  const results = runAll({ nativeMode: true });
+  const snapshot = JSON.parse(fs.readFileSync(SNAPSHOT, 'utf8'));
+  const diffs = [];
+  for (const [label, expected] of Object.entries(snapshot)) {
+    if (!(label in results)) {
+      diffs.push(`${label}: case no longer runs`);
+      continue;
+    }
+    subsetDiff(expected, results[label], label, diffs);
+  }
+  const unexpected = diffs.filter((d) => !NATIVE_ALLOWED.some((re) => re.test(d)));
+  assert.deepEqual(unexpected, [], `native contract drift:\n${unexpected.join('\n')}`);
 });

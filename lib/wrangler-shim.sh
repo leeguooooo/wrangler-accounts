@@ -19,7 +19,8 @@
 #
 # Decision flow:
 #   1. WA_PASSTHROUGH=1 / NOWRANGLER_ACCOUNTS_GUARD=1 set -> run real wrangler
-#   2. account-agnostic command (--version / --help / no args) -> run real wrangler
+#   2. account-agnostic command (--version / --help / no args / auth) or an
+#      explicit --profile with no exported Cloudflare credential -> run real wrangler
 #   3. wrangler-accounts missing OR no profiles configured -> run real wrangler
 #   4. otherwise -> print guidance and exit 1
 
@@ -77,9 +78,19 @@ if [ "${WA_PASSTHROUGH:-}" = "1" ] || [ "${NOWRANGLER_ACCOUNTS_GUARD:-}" = "1" ]
 fi
 
 # 2. Account-agnostic commands are harmless; let tooling probe them.
+#    `wrangler auth ...` manages wrangler's own native profiles.
 case "${1:-}" in
-  "" | -v | --version | -h | --help | help) passthrough "$@" ;;
+  "" | -v | --version | -h | --help | help | auth) passthrough "$@" ;;
 esac
+
+# 2b. An explicit native profile (`wrangler --profile <name> ...`) picks the
+#     account on purpose — unless an exported Cloudflare credential would
+#     override or redirect it.
+if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] && [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ] && [ -z "${CLOUDFLARE_API_KEY:-}" ]; then
+  for _a in "$@"; do
+    case "$_a" in --profile|--profile=*) passthrough "$@" ;; esac
+  done
+fi
 
 # 3. If wrangler-accounts isn't installed or has no profiles, stay out of the way.
 if ! command -v wrangler-accounts >/dev/null 2>&1; then

@@ -20,6 +20,41 @@ wrangler-accounts --profile work tail my-worker
 wrangler-accounts --profile personal dev
 ```
 
+## New in 1.9.0: built on wrangler's native profiles
+
+Wrangler 4.149 added its own named login profiles (`wrangler auth create`, `wrangler --profile <name>`, optional OS-keychain encryption). wrangler-accounts now builds on them **without changing any command you already use**:
+
+```bash
+wrangler-accounts migrate work            # move an OAuth profile into wrangler's own profile store
+wrangler-accounts protect work            # encrypt its OAuth credentials (key in macOS Keychain / Linux secret-tool)
+wrangler-accounts --profile work deploy   # same as before
+wrangler --profile work deploy            # now also works directly
+wrangler-accounts --profile work cf dns records list --zone example.com   # Cloudflare's new `cf` CLI
+```
+
+- **Two backends, one CLI.** Profiles you don't migrate keep the shadow-HOME backend and work with any wrangler version. Migrated profiles run as `wrangler --profile <name>`; `exec`, `list --deep`, `whoami`-style checks still isolate correctly (a bare `wrangler` or `npm run deploy` inside `exec` uses that profile only).
+- **`migrate` is opt-in and reversible.** It copies the credentials, asks wrangler to read them back (`wrangler auth token`), and only then removes the old copy. `--dry-run` shows the plan, `unmigrate` moves it back. An existing wrangler profile with the same name is never overwritten without `--force` (and then it is backed up first). Names wrangler doesn't allow (`acme.prod`) become `acme-prod`, or pick one with `--as`.
+- **OAuth encryption at rest (#3).** `protect <oauth-profile>` migrates if needed and lets wrangler encrypt the credentials (`<name>.enc`, AES-256-GCM, key in the OS keychain). Verified: no plaintext file is left. `unprotect` decrypts it back. `protect --all` now covers token *and* OAuth profiles.
+- **cf support.** `wrangler-accounts --profile <name> cf ...` and `exec <name> -- cf ...` run Cloudflare's `cf`: token profiles get `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`, OAuth profiles use cf's own login of the same name (`cf auth create <name>` once — cf and wrangler log in separately). The guard hook and PATH shim also cover a bare `cf`, **only** when it is Cloudflare's — Cloud Foundry's `cf` is never touched.
+
+### Do I still need wrangler-accounts?
+
+If you only use OAuth logins, run `wrangler` by hand, and are happy typing `--profile` or binding directories with `wrangler auth activate`, native profiles alone are enough. wrangler-accounts adds:
+
+- a persistent default and `WRANGLER_PROFILE` for scripts, plus positional shorthand (`wrangler-accounts work deploy`)
+- API-token profiles next to OAuth ones (and their tokens in the keychain)
+- stripping of exported `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`, which otherwise silently override or redirect `--profile`; the profile's own account id is exported for account-scoped commands
+- `exec <name>` subshells where *every* wrangler (including `npx`/`npm run`) and `cf` use that account
+- guard rails for AI agents: the Claude Code hook and the `wrangler`/`cf` PATH shim
+- `list --deep` health checks, notes, JSON output, and the same commands for old wrangler versions
+
+### Things to know about wrangler's keyring mode
+
+- wrangler-accounts never changes wrangler's global keyring setting. For a protected profile it passes `CLOUDFLARE_AUTH_USE_KEYRING=true` itself. A bare `wrangler --profile <name>` needs `wrangler auth keyring enable` (or that env var) to read it.
+- **`wrangler auth keyring disable` deletes every encrypted wrangler profile.** To go back to plaintext use `wrangler-accounts unprotect <name>`, which decrypts first.
+- `remove <name>` on a migrated profile keeps wrangler's native profile (you may use it directly) and says so; `remove <name> --delete-native` deletes it and its keychain key.
+- Shadow-HOME profiles always run with keyring mode off (every shadow profile looks like wrangler's `default` profile, so encryption there would share one key).
+
 ## Claude Code users (recommended)
 
 Install the marketplace and plugin first:
@@ -100,12 +135,19 @@ The shim **passes through to real `wrangler`** so it never gets in your way:
 - `wrangler --version` / `--help` (account-agnostic)
 - when no profiles are configured
 - inside `wrangler-accounts exec` and any wrangler-accounts-spawned subprocess (already isolated)
+- `wrangler auth ...` (wrangler's own profile management) and an explicit `wrangler --profile <name> ...` when no `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_KEY` is exported (1.9.0+)
+
+If Cloudflare's `cf` CLI is on your `PATH`, `shim install` also adds a `cf` shim with the same rules (it passes `cf auth ...` and `cf --profile ...` through). It checks the real `cf` every time and steps aside for anything that isn't Cloudflare's, so Cloud Foundry's `cf` keeps working.
 
 **Limitation:** `npx wrangler` / `pnpm wrangler` / `./node_modules/.bin/wrangler` run a project-local binary that a `PATH` shim can't shadow. The shim covers globally-invoked `wrangler`. The shim and the Claude Code hook are complementary and can both be installed.
 
 ## What it does
 
+Profiles that you have not migrated (all of them, until you run `migrate` or `protect` on an OAuth profile) work like this — and this backend works with every wrangler version:
+
 Every execution runs `wrangler` inside a per-invocation **shadow HOME** — a temporary directory that mirrors most of your real home, except `.wrangler/config/default.toml` is a symlink pointing at the saved profile's config. Token refreshes flow back to the profile automatically. Nothing touches your real `~/.wrangler`. Two parallel invocations get two independent shadow HOMEs.
+
+Migrated (native) profiles live in wrangler's own store (`~/.wrangler/config/<name>.toml` or `.enc`) and run as `wrangler <args> --profile <name>` with your real HOME. Where wrangler does not accept `--profile` (`wrangler whoami`, a subshell from `exec`), wrangler-accounts uses a shadow HOME whose directory bindings point every directory at that one profile. Both backends strip inherited Cloudflare credentials, export the profile's own `CLOUDFLARE_ACCOUNT_ID`, and use a per-profile `WRANGLER_CACHE_DIR`.
 
 ## Install
 
@@ -252,7 +294,7 @@ wrangler-accounts unprotect work      # put it back into token.json
 - Set `WRANGLER_ACCOUNTS_PROTECT_TOKENS=1` to make `token-add` protect by default. `remove` also deletes the keychain item.
 - If the keychain is locked (SSH session, headless box), commands for that profile fail with a clear error instead of running without a token.
 - What this protects: the token in backups, synced `~/.config`, disk images and accidental `cat`s. What it doesn't: anything already running as your user can still call `security` or `wrangler-accounts exec`.
-- OAuth profiles are not covered yet: wrangler reads `config.toml` from disk, so a plaintext copy has to exist in the shadow HOME while a command runs. See [#3](https://github.com/leeguooooo/wrangler-accounts/issues/3).
+- OAuth profiles (1.9.0+, wrangler 4.149+): `protect <name>` moves the profile into wrangler's native store and lets wrangler encrypt it with a key in the OS keychain. See "New in 1.9.0" above and [#3](https://github.com/leeguooooo/wrangler-accounts/issues/3).
 
 ## When to use `wrangler-accounts` vs. native env vars
 
@@ -274,6 +316,12 @@ wrangler-accounts unprotect work      # put it back into token.json
     --unset             With 'default': clear the persistent default
     --deep, --verify    With 'list': run wrangler whoami per profile for live verification
     --older-than <dur>  With 'gc': age threshold (e.g. 1h, 30m, 7d)
+    --all               protect/unprotect: every profile; migrate/unmigrate: every OAuth profile
+    --as <name>         With 'migrate': wrangler profile name to use
+    --dry-run           With 'migrate': show the plan, change nothing
+    --no-verify         With 'migrate': skip the 'wrangler auth token' check (offline)
+    --keep-native       With 'unmigrate': leave wrangler's copy in place
+    --delete-native     With 'remove': also delete the native wrangler profile and its key
 -v, -V, --version       Print version
 -h, --help              Show help
 ```
@@ -287,6 +335,7 @@ wrangler-accounts unprotect work      # put it back into token.json
 - `WRANGLER_ACCOUNTS_SECRET_BACKEND` — force `keychain` or `secret-service` (auto-detected by default)
 - `WRANGLER_ACCOUNTS_SHIM_DIR` — where `shim install` writes the `wrangler` shim (default `~/.wrangler-accounts/shims`)
 - `WA_PASSTHROUGH=1` — bypass the global `wrangler` shim for one command (`NOWRANGLER_ACCOUNTS_GUARD=1` also works)
+- `WRANGLER_ACCOUNTS_NATIVE=0|1` — force native wrangler profile support off / on (normally probed once per wrangler binary with `wrangler auth --help` and cached)
 - `XDG_CONFIG_HOME` — fallback base for the profiles directory
 
 Inside an isolated session, these are automatically set for the child process:

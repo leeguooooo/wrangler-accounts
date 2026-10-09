@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fake Cloud Foundry CLI.
+echo "cloudfoundry-cf $*"

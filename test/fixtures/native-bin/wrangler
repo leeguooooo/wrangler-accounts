@@ -1,0 +1,183 @@
+#!/usr/bin/env node
+'use strict';
+// Fake wrangler 4.149 with native auth profiles, for tests. Mirrors the parts
+// of workers-auth that wrangler-accounts relies on: profile resolution
+// (--profile > directory binding > default), <cfg>/config/<name>.toml|.enc,
+// CLOUDFLARE_AUTH_USE_KEYRING / preferences.json keyring mode with
+// plaintext->.enc migration on read, and the key in the (test) key store.
+// Knobs: WA_FAKE_TOKEN_FAIL=1 (auth token fails), WA_FAKE_NO_MIGRATE=1
+// (keyring mode never encrypts), WA_FAKE_OUT=<file> (append call log).
+const fs = require('fs');
+const path = require('path');
+const lib = path.join(__dirname, '..', '..', '..', 'lib');
+const { wranglerGlobalConfigDir } = require(path.join(lib, 'paths'));
+const native = require(path.join(lib, 'native'));
+const { availableBackend } = require(path.join(lib, 'secret-store'));
+
+const argv = process.argv.slice(2);
+const env = process.env;
+const cfg = wranglerGlobalConfigDir(env, env.HOME);
+
+function flag(name) {
+  const i = argv.indexOf(name);
+  if (i !== -1) return argv[i + 1];
+  const eq = argv.find((a) => a.startsWith(`${name}=`));
+  return eq ? eq.slice(name.length + 1) : undefined;
+}
+const positional = [];
+for (let i = 0; i < argv.length; i += 1) {
+  if (argv[i] === '--profile') { i += 1; continue; }
+  if (argv[i] === '--') break;
+  if (!argv[i].startsWith('-')) positional.push(argv[i]);
+}
+const explicitProfile = flag('--profile');
+
+function bindings() {
+  try { return JSON.parse(fs.readFileSync(path.join(cfg, 'profiles', 'directory-bindings.json'), 'utf8')); } catch { return {}; }
+}
+function resolveProfile() {
+  if (explicitProfile) return explicitProfile;
+  const cwd = path.resolve(process.cwd());
+  const entries = Object.entries(bindings()).sort(([a], [b]) => b.length - a.length);
+  for (const [dir, p] of entries) {
+    if (cwd === dir || (cwd.startsWith(dir) && cwd[dir.length] === path.sep)) return p;
+  }
+  return 'default';
+}
+function keyringOn() {
+  if (env.CLOUDFLARE_AUTH_USE_KEYRING === 'true') return true;
+  if (env.CLOUDFLARE_AUTH_USE_KEYRING === 'false') return false;
+  if (env.CLOUDFLARE_AUTH_USE_KEYRING !== undefined) {
+    console.error(`Expected CLOUDFLARE_AUTH_USE_KEYRING to be "true" or "false", but got ${JSON.stringify(env.CLOUDFLARE_AUTH_USE_KEYRING)}`);
+    process.exit(1);
+  }
+  try { return JSON.parse(fs.readFileSync(path.join(cfg, 'preferences.json'), 'utf8')).keyring_enabled === true; } catch { return false; }
+}
+const store = () => availableBackend(env).backend;
+function getKey(profile) {
+  try { return native.decodeKeyEnvelope(store().get(profile, env, 'wrangler')); } catch { return null; }
+}
+function ensureKey(profile) {
+  const k = getKey(profile);
+  if (k) return k;
+  const fresh = require('crypto').randomBytes(32);
+  store().put(profile, native.encodeKeyEnvelope(fresh), 'Cloudflare credentials key', env, 'wrangler');
+  return fresh;
+}
+function files(profile) {
+  return { toml: path.join(cfg, 'config', `${profile}.toml`), enc: path.join(cfg, 'config', `${profile}.enc`) };
+}
+function writeCreds(profile, text) {
+  const f = files(profile);
+  fs.mkdirSync(path.dirname(f.toml), { recursive: true });
+  if (keyringOn() && env.WA_FAKE_NO_MIGRATE !== '1') {
+    fs.writeFileSync(f.enc, JSON.stringify(native.encryptToEnvelope(text, ensureKey(profile)), null, '\t'), { mode: 0o600 });
+    if (fs.existsSync(f.toml)) fs.rmSync(f.toml);
+  } else {
+    fs.writeFileSync(f.toml, text, { mode: 0o600 });
+  }
+}
+function readCreds(profile) {
+  const f = files(profile);
+  if (keyringOn()) {
+    if (fs.existsSync(f.enc)) {
+      const key = getKey(profile);
+      if (!key) return null;
+      try { return native.decryptEnvelope(fs.readFileSync(f.enc, 'utf8'), key); } catch { return null; }
+    }
+    if (fs.existsSync(f.toml)) {
+      const text = fs.readFileSync(f.toml, 'utf8');
+      if (env.WA_FAKE_NO_MIGRATE !== '1') writeCreds(profile, text);
+      return text;
+    }
+    return null;
+  }
+  return fs.existsSync(f.toml) ? fs.readFileSync(f.toml, 'utf8') : null;
+}
+function token(text) {
+  const m = /^\s*oauth_token\s*=\s*"([^"]+)"/m.exec(text || '');
+  return m ? m[1] : null;
+}
+function log(entry) {
+  if (env.WA_FAKE_OUT) fs.appendFileSync(env.WA_FAKE_OUT, `${JSON.stringify(entry)}\n`);
+}
+
+const cmd = positional[0];
+const sub = positional[1];
+const profile = resolveProfile();
+log({ argv, cmd, profile, home: env.HOME, cwd: process.cwd(), keyring: env.CLOUDFLARE_AUTH_USE_KEYRING ?? null });
+
+if ((cmd === 'auth' && (sub === undefined || argv.includes('--help'))) || (cmd === 'auth' && sub === '--help')) {
+  console.log('wrangler auth\n\nCOMMANDS\n  wrangler auth token\n  wrangler auth keyring\n  wrangler auth create [name]\n  wrangler auth delete <name>\n  wrangler auth activate <name> [dir]\n  wrangler auth deactivate [dir]\n  wrangler auth list\n\n wrangler 4.149.0');
+  process.exit(0);
+}
+if (cmd === 'whoami' || cmd === 'login' || cmd === 'logout') {
+  if (explicitProfile) {
+    console.error(`--profile cannot be used with the ${cmd} command`);
+    process.exit(1);
+  }
+}
+if (cmd === 'whoami') {
+  const text = env.CLOUDFLARE_API_TOKEN ? `oauth_token = "${env.CLOUDFLARE_API_TOKEN}"` : readCreds(profile);
+  if (!token(text)) { console.error('Not logged in'); process.exit(1); }
+  if (env.WA_FAKE_CONTRACT === '1') {
+    // identical to test/fixtures/contract-bin/wrangler
+    console.log([
+      '👋 You are logged in with an OAuth Token, associated with the email test@example.com.',
+      '┌─────────────────────┬──────────────────────────────────┐',
+      '│ Account Name        │ Account ID                       │',
+      '├─────────────────────┼──────────────────────────────────┤',
+      '│ Test Account        │ 0123456789abcdef0123456789abcdef │',
+      '└─────────────────────┴──────────────────────────────────┘',
+    ].join('\n'));
+    process.exit(0);
+  }
+  console.log(`👋 You are logged in with an OAuth Token, associated with the email ${profile}@example.com.`);
+  console.log('│ Fake Account │ 0123456789abcdef0123456789abcdef │');
+  process.exit(0);
+}
+if (cmd === 'auth' && sub === 'token') {
+  if (env.WA_FAKE_TOKEN_FAIL === '1') { console.error('Not logged in. Please run `wrangler login`.'); process.exit(1); }
+  const t = token(readCreds(profile));
+  if (!t) { console.error('Not logged in. Please run `wrangler login`.'); process.exit(1); }
+  console.log(JSON.stringify({ type: 'oauth', token: t }, null, 2));
+  process.exit(0);
+}
+if (cmd === 'auth' && sub === 'create') {
+  const name = positional[2];
+  writeCreds(name, `oauth_token = "created-${name}"\nrefresh_token = "r"\nexpiration_time = "2099-01-01T00:00:00.000Z"\n`);
+  console.log(`Profile "${name}" created.`);
+  process.exit(0);
+}
+// Anything else: report what we got and which credentials wrangler would use.
+const text = env.CLOUDFLARE_API_TOKEN ? null : readCreds(profile);
+if (env.WA_FAKE_CONTRACT === '1') {
+  // Contract format (see test/fixtures/contract-bin/wrangler), with
+  // `--profile <name>` removed from argv and the credentials wrangler would
+  // actually use reported as shadowDefaultToml.
+  const pick = ['WRANGLER_PROFILE', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_KEY', 'CLOUDFLARE_EMAIL', 'WA_PASSTHROUGH', 'WRANGLER_SEND_METRICS'];
+  const out = {};
+  for (const k of pick) if (env[k] !== undefined) out[k] = env[k];
+  const plain = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === '--profile') { i += 1; continue; }
+    plain.push(argv[i]);
+  }
+  console.log(JSON.stringify({ argv: plain, env: out, homeIsReal: env.HOME === env.WA_CONTRACT_REAL_HOME, shadowDefaultToml: env.CLOUDFLARE_API_TOKEN ? '' : (text || '') }));
+  process.exit(0);
+}
+console.log(JSON.stringify({
+  argv,
+  profile,
+  oauthToken: token(text),
+  homeIsShadow: env.HOME !== env.WA_TEST_REAL_HOME,
+  env: {
+    CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN ?? null,
+    CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID ?? null,
+    CLOUDFLARE_AUTH_USE_KEYRING: env.CLOUDFLARE_AUTH_USE_KEYRING ?? null,
+    WA_ORIG_AUTH_USE_KEYRING: env.WA_ORIG_AUTH_USE_KEYRING ?? null,
+    WRANGLER_CACHE_DIR: env.WRANGLER_CACHE_DIR ?? null,
+    WRANGLER_PROFILE: env.WRANGLER_PROFILE ?? null,
+    WA_PASSTHROUGH: env.WA_PASSTHROUGH ?? null,
+  },
+}));

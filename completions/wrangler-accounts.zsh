@@ -15,8 +15,12 @@ _wrangler_accounts() {
     'gc:Remove stale shadow HOMEs from tmpdir'
     'remove:Remove a profile'
     'token-add:Save an API token profile'
-    'protect:Move token profile secrets into the OS keychain'
-    'unprotect:Move token profile secrets back into token.json'
+    'protect:Encrypt a profile (token: OS keychain; OAuth: wrangler keyring)'
+    'unprotect:Store a protected profile in plaintext again'
+    'migrate:Move OAuth profiles into wrangler native profiles'
+    'unmigrate:Move native profiles back to wrangler-accounts'
+    'note:Show or set a profile note'
+    'shim:Install/uninstall the wrangler (and cf) PATH shim'
     'use:(deprecated) Globally switch to a profile'
     'sync-active:(deprecated) Alias for sync-default'
   )
@@ -39,7 +43,12 @@ _wrangler_accounts() {
     '--no-backup[Disable backup on use]' \
     '--unset[Unset the persistent default profile]' \
     '--protect[Store the token in the OS keychain]' \
-    '--all[All token profiles]' \
+    '--all[All profiles]' \
+    '--dry-run[migrate: show the plan only]' \
+    '--no-verify[migrate: skip the wrangler check]' \
+    '--as[migrate: wrangler profile name]:name:' \
+    '--keep-native[unmigrate: keep the native profile]' \
+    '--delete-native[remove: also delete the native profile]' \
     '--older-than[Age threshold for gc]:duration:' \
     '1:command:->command' \
     '*::arg:->args'
@@ -55,7 +64,7 @@ _wrangler_accounts() {
       ;;
     args)
       case $words[1] in
-        save|sync|login|remove|default|whoami|exec|use|protect|unprotect)
+        save|sync|login|remove|default|whoami|exec|use|protect|unprotect|migrate|unmigrate|note)
           _get_profiles
           ;;
       esac

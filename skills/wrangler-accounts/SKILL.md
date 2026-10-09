@@ -7,7 +7,7 @@ description: AWS-style multi-account convenience for Cloudflare Wrangler. Use wh
 
 ## Overview
 
-`wrangler-accounts` runs `wrangler` under per-invocation **shadow HOME** isolation, so multiple shells can use different Cloudflare accounts in parallel without any global switching. Profile resolution order: `--profile` / `-p` > positional shorthand > `$WRANGLER_PROFILE` > `profilesDir/default` > hard error.
+`wrangler-accounts` runs `wrangler` under per-invocation **shadow HOME** isolation (or, for profiles migrated with `migrate`, as `wrangler --profile <name>` on wrangler ≥ 4.149), so multiple shells can use different Cloudflare accounts in parallel without any global switching. Profile resolution order: `--profile` / `-p` > positional shorthand > `$WRANGLER_PROFILE` > `profilesDir/default` > hard error.
 
 ## Installation
 
@@ -68,6 +68,7 @@ If `wrangler-accounts --version` is below any of these, **upgrade first** before
 | **≥ 1.4.0** | `login` refuses non-TTY contexts and accidental overwrites | `login <name>` hangs forever in non-interactive contexts; reflexive `login` overwrites a healthy profile |
 | **≥ 1.6.0** | API token profiles (`token-add`) + anonymous env-var pass-through | only OAuth profiles existed; `CLOUDFLARE_API_TOKEN` in env still required a named profile to be selected |
 | **≥ 1.8.0** | token profiles can keep the API token in the OS keychain (`protect`, `token-add --protect`) | `protect` is an unknown command; tokens only live in `token.json` |
+| **≥ 1.9.0** | native wrangler profiles (`migrate` / `unmigrate`), OAuth encryption at rest (`protect <oauth>`), Cloudflare `cf` support (`--profile <name> cf ...`) | `migrate` is an unknown command; `protect <oauth>` says "skipped" |
 
 ```bash
 npm i -g github:leeguooooo/wrangler-accounts    # reinstall from main = latest
@@ -158,7 +159,7 @@ Use `--json` for structured output.
 ### List and inspect profiles
 
 - `wrangler-accounts list` — text table with NAME / STATUS / EXPIRES / IDENTITY columns
-- `wrangler-accounts list --json` — structured: array of `{name, isDefault, isActive, status, expirationTime, hasRefreshToken, identity, verified, verifyError}`
+- `wrangler-accounts list --json` — structured: array of `{name, isDefault, isActive, status, expirationTime, hasRefreshToken, identity, verified, verifyError}`; 1.9.0+ also `backend` (`shadow` | `native` | `null` for token), `nativeName`, `credentialPath`
 - `wrangler-accounts list --plain` — one profile name per line (scriptable)
 - `wrangler-accounts list --deep` — **authoritative** check: spawns `wrangler whoami` in a shadow HOME for every profile and reports whether Cloudflare actually accepts the credentials. Slower (makes network calls), but the only way to catch revoked refresh tokens or broken profile files.
 - `wrangler-accounts status` / `status --json`
@@ -173,6 +174,8 @@ Use `--json` for structured output.
 | `EXPIRED` / `expired` | access_token expired **AND** no refresh_token saved; profile is genuinely broken | `wrangler-accounts login <name>` |
 | `unknown` | profile file has no `expiration_time` field | run `list --deep` to verify live |
 | `token` | API token profile (1.6.0+) — no expiration concept, always ready | none |
+| `encrypted` | native OAuth profile encrypted by wrangler, key in the OS keychain (1.9.0+); expiry not readable without the key | none — run `list --deep` for a live check |
+| `MISSING` / `missing` | native profile whose wrangler credentials are gone (e.g. someone ran `wrangler auth delete` or `wrangler auth keyring disable`) | `wrangler-accounts login <name> --force` |
 
 **Cloudflare OAuth lifecycle reference:** access tokens are short-lived (~1 hour) by design. Every profile with `offline_access` in its scopes also has a long-lived refresh_token (~30 days, silently extended on use). Wrangler refreshes access tokens automatically whenever it runs a command and the current one is past expiry. **Do not tell the user to re-login just because `list` shows an expired access token** — check `hasRefreshToken` first. If the profile's STATUS is `valid*` / `refreshable`, nothing is wrong.
 
@@ -197,7 +200,7 @@ wrangler-accounts work r2 list
 
 Token profiles appear in `list` with a `[token]` type indicator and `STATUS: token` — there is no expiration concept, so they are always ready to use. `remove` works the same as for OAuth profiles.
 
-**Keychain storage (1.8.0+):** `token-add ... --protect`, or `protect <name>` / `protect --all` for existing profiles, moves the API token into the macOS Keychain / Linux Secret Service; `token.json` then holds only the account ID and `list` shows `token (keychain)`. `unprotect <name>` reverses it. Migration only removes the plaintext after the stored copy reads back identical. If a protected profile fails with "could not be read", the keychain is locked (often SSH/headless) — tell the user to unlock it; do not try to work around it. OAuth profiles cannot be protected yet.
+**Keychain storage (1.8.0+; OAuth profiles 1.9.0+, see "Native wrangler profiles" below):** `token-add ... --protect`, or `protect <name>` / `protect --all` for existing profiles, moves the API token into the macOS Keychain / Linux Secret Service; `token.json` then holds only the account ID and `list` shows `token (keychain)`. `unprotect <name>` reverses it. Migration only removes the plaintext after the stored copy reads back identical. If a protected profile fails with "could not be read", the keychain is locked (often SSH/headless) — tell the user to unlock it; do not try to work around it. OAuth profiles: `protect <name>` (1.9.0+, wrangler ≥ 4.149) has wrangler encrypt them instead.
 
 **Env-var pass-through (1.6.0+):** when `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are already set in the environment and no profile is specified, `wrangler-accounts` runs in anonymous-token mode (no named profile needed). Useful for CI jobs that inject credentials via secrets:
 
@@ -211,7 +214,32 @@ CLOUDFLARE_API_TOKEN=xxx CLOUDFLARE_ACCOUNT_ID=yyy wrangler-accounts deploy
 - `wrangler-accounts sync <name>` — refresh a specific profile from the current login
 - `wrangler-accounts sync-default` — refresh the default profile
 - `wrangler-accounts login <name>` — fresh isolated OAuth login
-- `wrangler-accounts remove <name>` — delete a profile (works for both OAuth and token profiles)
+- `wrangler-accounts remove <name>` — delete a profile (works for both OAuth and token profiles). For a migrated (native) profile wrangler's own copy is **kept** and the output says so; add `--delete-native` to delete it and its keychain key too.
+- For native profiles: `sync` / `save --force` write into wrangler's `<name>.toml` (refused for encrypted profiles), `login <name> --force` runs `wrangler auth create <name>`.
+
+### Native wrangler profiles, OAuth encryption, cf (1.9.0+, wrangler ≥ 4.149)
+
+Wrangler 4.149 has its own named profiles (`wrangler auth create`, `wrangler --profile <name>`). wrangler-accounts can keep a profile there instead of in its shadow HOME. **All wrangler-accounts commands behave the same either way** — never tell the user to change how they call it.
+
+```bash
+wrangler-accounts migrate work --dry-run   # show the plan, change nothing
+wrangler-accounts migrate work             # copy -> verify with `wrangler auth token` -> drop old copy
+wrangler-accounts migrate --all            # every OAuth profile (token profiles are skipped)
+wrangler-accounts unmigrate work           # back to the shadow backend
+wrangler-accounts protect work             # OAuth: migrate if needed + wrangler encrypts it (key in OS keychain)
+wrangler-accounts unprotect work           # decrypt back to plaintext (never use `wrangler auth keyring disable`)
+wrangler-accounts --profile work cf zones list   # Cloudflare's cf CLI under a profile
+```
+
+Rules for agents:
+- `migrate` / `protect` on OAuth are opt-in: only run them when the user asks (encryption, "use native profiles", issue #3). They need wrangler ≥ 4.149; otherwise they print the upgrade command (`npm i -g wrangler@latest`) — relay it.
+- `migrate` refuses to overwrite an existing wrangler profile of the same name. Do **not** add `--force` on your own; ask the user (with `--force` the old files are backed up into the profile dir). Names wrangler rejects (`acme.prod`) are mapped (`acme-prod`); `--as <name>` picks another.
+- If verification fails (offline + expired access token), nothing changes. `--no-verify` exists, but prefer retrying online.
+- **Never run `wrangler auth keyring disable`** — it deletes every encrypted wrangler profile. To decrypt use `wrangler-accounts unprotect <name>`.
+- An encrypted profile works through wrangler-accounts automatically. A bare `wrangler --profile <name>` needs `wrangler auth keyring enable` (or `CLOUDFLARE_AUTH_USE_KEYRING=true`).
+- `wrangler-accounts <name> login` / `logout` (passthrough) are refused for native profiles because wrangler would act on its default login; use `wrangler-accounts login <name> --force` / `remove <name> --delete-native`.
+- cf: token profiles just work. OAuth profiles need cf's own login with the same name once — the error tells the user to run `cf auth create <name>` (interactive browser login, so the **user** runs it, not you). `cf` is also Cloud Foundry's command; wrangler-accounts only ever runs/blocks Cloudflare's (identified by its npm package), never Cloud Foundry's.
+- Inside `exec <name>`, a bare `wrangler`, `npx wrangler`, `npm run deploy`, and `cf` all use that profile, for both backends.
 
 ### Clean up stale shadow HOMEs
 
@@ -540,7 +568,7 @@ Use `--json` when another tool needs to parse results. All v1.0 commands that pr
 
 ## Naming rules
 
-Profile names: letters, numbers, dot, underscore, dash only. Names matching management subcommand names (`exec`, `default`, `whoami`, `gc`, `login`, `token-add`, `protect`, `unprotect`, `list`, `status`, `save`, `sync`, `sync-default`, `remove`, `use`, `sync-active`) cannot be reached via positional shorthand — use `--profile <name>` for those.
+Profile names: letters, numbers, dot, underscore, dash only. Names matching management subcommand names (`exec`, `default`, `whoami`, `gc`, `login`, `token-add`, `protect`, `unprotect`, `migrate`, `unmigrate`, `note`, `shim`, `list`, `status`, `save`, `sync`, `sync-default`, `remove`, `use`, `sync-active`) cannot be reached via positional shorthand — use `--profile <name>` for those.
 
 ## Deprecated
 

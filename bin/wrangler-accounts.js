@@ -40,7 +40,25 @@ const {
   unprotectTokenProfile,
   setProfileNote: setProfileNoteImpl,
   removeProfile: removeProfileImpl,
+  getProfileBackend,
+  updateMeta,
 } = require("../lib/profile-store");
+const native = require("../lib/native");
+const {
+  MigrateError,
+  UNSUPPORTED_HINT,
+  migrateProfile,
+  unmigrateProfile,
+  protectOAuthProfile,
+  unprotectOAuthProfile,
+} = require("../lib/migrate");
+const {
+  findCloudflareCf,
+  isCloudflareCf,
+  cfProfileExists,
+  cfProfileFiles,
+  isCfCommand,
+} = require("../lib/cf");
 const { backendName } = require("../lib/secret-store");
 const {
   parseWranglerWhoamiOutput,
@@ -55,13 +73,18 @@ const {
 const { resolveProfile, ResolveError } = require("../lib/resolve");
 const {
   runIsolated,
+  runNative,
+  runBoundShadow,
   buildIsolatedEnv,
+  buildNativeEnv,
   cleanupShadow,
 } = require("../lib/isolation");
 const {
   getShimDir,
   findRealWrangler,
   installShim,
+  installCfShim,
+  isCfShimInstalled,
   uninstallShim,
   shimStatus,
   detectShell,
@@ -90,6 +113,9 @@ const MANAGEMENT_SUBCOMMANDS = new Set([
   "use",
   "exec",
   "shim",
+  "migrate",
+  "unmigrate",
+  "__is-cloudflare-cf",
 ]);
 
 function findCloudflared() {
@@ -267,6 +293,277 @@ function runAnonymousTokenMode({
   });
 }
 
+// ---------------------------------------------------------------------------
+// Native-profile (wrangler --profile) and cf helpers.
+
+function nativeContext(profilesDir, name) {
+  const profileDir = path.join(profilesDir, name);
+  const meta = readMeta(profileDir) || {};
+  const nativeName = meta.nativeName || null;
+  const files = nativeName ? native.nativePaths(nativeName) : null;
+  const state = nativeName ? native.nativeState(nativeName) : "missing";
+  return {
+    profileDir,
+    meta,
+    nativeName,
+    files,
+    state,
+    accountId: getMetaIdentity(meta)?.accountId || null,
+  };
+}
+
+let nativeProbeResult = null;
+function nativeProbe(profilesDir) {
+  if (!nativeProbeResult) nativeProbeResult = native.probeNativeSupport({ profilesDir });
+  return nativeProbeResult;
+}
+
+function nativeSessionState(ctx) {
+  if (ctx.state === "plaintext") return readSessionState(ctx.files.toml);
+  return {
+    expirationTime: null,
+    expired: null,
+    hasRefreshToken: false,
+    effective: ctx.state === "encrypted" ? "encrypted" : "missing",
+  };
+}
+
+function ensureNativeUsable(name, ctx, profilesDir) {
+  const probe = nativeProbe(profilesDir);
+  if (!probe.supported) {
+    die(
+      [
+        `Profile '${name}' lives in wrangler's native profile store ('${ctx.nativeName}'), but the wrangler on PATH cannot use it: ${probe.reason}.`,
+        `profile '${name}' 已迁移到 wrangler 原生 profile，但当前 wrangler 不支持。`,
+        UNSUPPORTED_HINT,
+        `Or move it back: wrangler-accounts unmigrate ${name}`,
+      ].join("\n"),
+      2,
+    );
+  }
+  if (ctx.state === "missing") {
+    die(
+      [
+        `wrangler has no credentials for native profile '${ctx.nativeName}' (${ctx.files.toml}).`,
+        `wrangler 里找不到 '${ctx.nativeName}' 的凭据（可能被 wrangler auth delete / keyring disable 删掉了）。`,
+        `Re-authenticate: wrangler-accounts login ${name} --force`,
+      ].join("\n"),
+      3,
+    );
+  }
+}
+
+function cfMissingMessage(found) {
+  if (found && found.other) {
+    return [
+      `The 'cf' on PATH (${found.other}) is not Cloudflare's CLI (it looks like Cloud Foundry), so wrangler-accounts will not run it.`,
+      `PATH 里的 cf（${found.other}）不是 Cloudflare 的 CLI（看起来是 Cloud Foundry），不会代为执行。`,
+      `Install Cloudflare's: npm i -g cf   (needs Node.js 22+; it also installs a 'cloudflare' command)`,
+    ].join("\n");
+  }
+  return [
+    "Cloudflare's 'cf' CLI is not installed. 未安装 Cloudflare 的 cf 命令行。",
+    "Install it: npm i -g cf   (needs Node.js 22+)",
+  ].join("\n");
+}
+
+function cfProfileNameFor(name, meta) {
+  return (meta && (meta.cfProfile || meta.nativeName)) || native.suggestNativeName(name) || name;
+}
+
+function cfLoginGuidance(name, cfName) {
+  return [
+    `cf has no login for profile '${cfName}' yet — cf and wrangler keep separate logins.`,
+    `cf 还没有 '${cfName}' 的登录（cf 和 wrangler 的登录是分开的）。先运行一次：`,
+    ``,
+    `  cf auth create ${cfName}`,
+    ``,
+    `Then retry: wrangler-accounts --profile ${name} cf ...`,
+    `(Token profiles need no cf login: wrangler-accounts token-add <name> <api-token> <account-id>)`,
+  ].join("\n");
+}
+
+function findCf() {
+  return findCloudflareCf({ pathEnv: process.env.PATH || "", skipDirs: [getShimDir(process.env)] });
+}
+
+/**
+ * Run Cloudflare's cf for a resolved profile. Token profiles: the token and
+ * account id go in the environment. OAuth profiles: cf's own profile with the
+ * same name via --profile (cf and wrangler use different OAuth clients, so
+ * wrangler's credentials are never handed to cf).
+ */
+function runCfForProfile({ resolved, profilesDir, args, cfPath = null }) {
+  let bin = cfPath;
+  if (!bin) {
+    const found = findCf();
+    if (!found || !found.path) die(cfMissingMessage(found), 2);
+    bin = found.path;
+  }
+  const profileDir = path.join(profilesDir, resolved.name);
+  const type = getProfileType(profileDir);
+  const meta = readMeta(profileDir) || {};
+  if (type === "token") {
+    let creds;
+    try {
+      creds = resolveTokenCredentials(profileDir);
+    } catch (err) {
+      die(`Token profile '${resolved.name}' is protected but its token could not be read: ${err.message}`);
+    }
+    if (!creds || !creds.apiToken) die(`Token profile '${resolved.name}' is missing token.json credentials.`);
+    return runNative({
+      command: bin,
+      args,
+      realHome: os.homedir(),
+      profile: resolved.name,
+      profileDir,
+      apiToken: creds.apiToken,
+      accountId: creds.accountId || null,
+    });
+  }
+  const cfName = cfProfileNameFor(resolved.name, meta);
+  const sub = native.firstPositional(args);
+  const authSub = sub === "auth" ? native.firstPositional(args.slice(args.indexOf("auth") + 1)) : null;
+  let cfArgs = args;
+  // `cf auth whoami` takes --profile; the other `cf auth` commands are global.
+  if (sub !== "auth" || authSub === "whoami") {
+    if (!cfProfileExists(cfName)) die(cfLoginGuidance(resolved.name, cfName), 2);
+    cfArgs = native.withProfileFlag(args, cfName);
+  }
+  return runNative({
+    command: bin,
+    args: cfArgs,
+    realHome: os.homedir(),
+    profile: resolved.name,
+    profileDir,
+    accountId: getMetaIdentity(meta)?.accountId || null,
+  });
+}
+
+function shQuote(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Inside `exec <oauth-profile>`, a bare `cf` must not fall back to cf's own
+ * default login. Put a wrapper first on PATH that adds --profile <name> (or
+ * explains how to create that cf login). No-op when Cloudflare's cf is not
+ * installed — Cloud Foundry's cf is left completely alone.
+ */
+function cfWrapperPreparer(name, meta) {
+  const found = findCf();
+  if (!found || !found.path) return null;
+  const cfName = cfProfileNameFor(name, meta);
+  const files = cfProfileFiles(cfName);
+  return (shadow) => {
+    const binDir = path.join(shadow, ".wa-bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const guidance = cfLoginGuidance(name, cfName)
+      .split("\n")
+      .map((l) => `  echo ${shQuote(l)} >&2`)
+      .join("\n");
+    const script = `#!/bin/sh
+# wrangler-accounts: cf for profile ${name} (exec subshell)
+if [ -n "\${WA_ORIG_AUTH_USE_KEYRING+x}" ]; then
+  CLOUDFLARE_AUTH_USE_KEYRING="$WA_ORIG_AUTH_USE_KEYRING"; export CLOUDFLARE_AUTH_USE_KEYRING
+else
+  unset CLOUDFLARE_AUTH_USE_KEYRING
+fi
+for _a in "$@"; do
+  case "$_a" in --profile|--profile=*) exec ${shQuote(found.path)} "$@" ;; esac
+done
+case "\${1:-} \${2:-}" in
+  "auth whoami"*) ;;
+  " "* | "auth "* | "-v "* | "--version "* | "-h "* | "--help "*) exec ${shQuote(found.path)} "$@" ;;
+esac
+if [ ! -e ${shQuote(files.json)} ] && [ ! -e ${shQuote(files.enc)} ]; then
+${guidance}
+  exit 2
+fi
+exec ${shQuote(found.path)} "$@" --profile ${shQuote(cfName)}
+`;
+    for (const bin of ["cf", "cloudflare"]) {
+      const p = path.join(binDir, bin);
+      fs.writeFileSync(p, script, { mode: 0o755 });
+      fs.chmodSync(p, 0o755);
+    }
+    return binDir;
+  };
+}
+
+/** Is `cmd` (as given to exec) Cloudflare's cf? Never true for Cloud Foundry. */
+function resolveExecCf(cmd) {
+  if (!isCfCommand(cmd)) return null;
+  if (cmd.includes("/")) return isCloudflareCf(cmd) ? cmd : null;
+  const found = findCf();
+  if (!found || !found.path) return null;
+  // `exec x -- cf` means the first cf on PATH; only take over when that one is Cloudflare's.
+  if (path.basename(cmd) === "cf" && found.via !== "cf") return null;
+  return found.path;
+}
+
+function nativeLoginGuidance(name, first) {
+  return [
+    `'wrangler ${first}' cannot target a named wrangler profile — it would act on wrangler's DEFAULT login.`,
+    `'wrangler ${first}' 不能指定 profile，会作用在 wrangler 的默认登录上，已拦下。`,
+    first === "login"
+      ? `Re-authenticate this profile with: wrangler-accounts login ${name} --force`
+      : `Remove this profile with: wrangler-accounts remove ${name} --delete-native`,
+  ].join("\n");
+}
+
+function runNativeProfileCommand({ resolved, profilesDir, command, args, captureStdout }) {
+  const ctx = nativeContext(profilesDir, resolved.name);
+  ensureNativeUsable(resolved.name, ctx, profilesDir);
+  if (ctx.state === "plaintext") {
+    const session = readSessionState(ctx.files.toml);
+    if (session.effective === "expired") {
+      die(
+        `Profile '${resolved.name}' has expired Wrangler OAuth credentials and no refresh_token to renew them (expiration_time: ${session.expirationTime}). Run 'wrangler-accounts login ${resolved.name}' to re-authenticate.`,
+        3,
+      );
+    }
+  }
+  const encrypted = ctx.state === "encrypted";
+  const common = {
+    profile: resolved.name,
+    profileDir: ctx.profileDir,
+    realHome: os.homedir(),
+    accountId: ctx.accountId,
+    baseEnv: process.env,
+    captureStdout,
+    cloudflaredPath: findCloudflared(),
+  };
+  const boundShadow = (cmd, cmdArgs, prepareShadow = null) =>
+    runBoundShadow({
+      ...common,
+      nativeName: ctx.nativeName,
+      nativeFiles: ctx.files,
+      command: cmd,
+      args: cmdArgs,
+      encrypted,
+      prepareShadow,
+    });
+
+  if (command !== "wrangler") {
+    // exec: a subshell / arbitrary command. A bound shadow makes every bare
+    // `wrangler` (including `npx wrangler` / `npm run deploy`) resolve to
+    // this profile without needing --profile.
+    return boundShadow(command, args, captureStdout ? null : cfWrapperPreparer(resolved.name, ctx.meta));
+  }
+  const first = native.firstPositional(args);
+  if (first === "login" || first === "logout") die(nativeLoginGuidance(resolved.name, first), 2);
+  // `wrangler whoami` rejects --profile; resolve it through the bound shadow.
+  if (first === "whoami") return boundShadow("wrangler", args);
+  let wranglerArgs = native.withProfileFlag(args, ctx.nativeName);
+  if (first === "auth") {
+    const rest = args.slice(args.indexOf("auth") + 1);
+    // Only `auth token` takes --profile; the other auth commands are global.
+    wranglerArgs = native.firstPositional(rest) === "token" ? native.withProfileFlag(args, ctx.nativeName) : args;
+  }
+  return runNative({ ...common, command: "wrangler", args: wranglerArgs, encrypted });
+}
+
 function runResolvedProfileCommand({
   resolved,
   profilesDir,
@@ -276,6 +573,10 @@ function runResolvedProfileCommand({
 }) {
   const profileDir = path.join(profilesDir, resolved.name);
   const profileType = getProfileType(profileDir);
+
+  if (profileType === "oauth" && getProfileBackend(profileDir) === "native") {
+    return runNativeProfileCommand({ resolved, profilesDir, command, args, captureStdout });
+  }
 
   if (profileType === "token") {
     let creds;
@@ -336,6 +637,10 @@ function runResolvedProfileCommand({
     baseEnv: process.env,
     captureStdout,
     cloudflaredPath: findCloudflared(),
+    prepareShadow:
+      command !== "wrangler" && !captureStdout
+        ? cfWrapperPreparer(resolved.name, readMeta(profileDir))
+        : null,
   });
 }
 
@@ -352,7 +657,11 @@ Commands:
   save <name>
   token-add <name> <api-token> <account-id> [--protect]
   protect <name> | --all  Move token profile secrets into the OS keychain
+                          OAuth profiles: encrypted at rest by wrangler's keyring support (wrangler 4.149+)
   unprotect <name> | --all
+  migrate <name> | --all  Move OAuth profiles into wrangler's native profile store
+                          [--as <wrangler-name>] [--dry-run] [--force] [--no-verify]
+  unmigrate <name> | --all [--keep-native]
   sync <name>
   sync-active
   sync-default
@@ -361,6 +670,8 @@ Commands:
   exec <name> [-- <cmd> [args]]
   shim [install | uninstall | status] [--apply]
   remove <name>
+  remove <name> --delete-native   Also delete the native wrangler profile
+  --profile <name> cf <args>      Run Cloudflare's cf CLI under a profile
 
 Deprecated:
   use <name>              Prints migration guidance; use 'default' or '--profile' instead
@@ -374,6 +685,9 @@ Options:
   -f, --force             Overwrite existing profile on save
   --protect               token-add: store the token in the OS keychain, not token.json
   --all                   protect/unprotect: every token profile
+                          (1.9+: every profile; migrate/unmigrate: every OAuth profile)
+  --as <name>             migrate: wrangler profile name to use
+  --dry-run               migrate: show what would happen, change nothing
   -h, --help              Show help
   -v, --version           Print version
 
@@ -382,6 +696,7 @@ Env:
   WRANGLER_ACCOUNTS_DIR
   WRANGLER_ACCOUNTS_SHIM_DIR
   WRANGLER_ACCOUNTS_PROTECT_TOKENS=1   token-add defaults to --protect
+  WRANGLER_ACCOUNTS_NATIVE=0|1         force native wrangler profile support off/on
   XDG_CONFIG_HOME
 
 Examples:
@@ -389,6 +704,9 @@ Examples:
   wrangler-accounts default work
   wrangler-accounts --profile work deploy
   wrangler-accounts shim install --apply
+  wrangler-accounts migrate work            # native wrangler profile, same commands
+  wrangler-accounts protect work            # encrypt OAuth credentials (keychain)
+  wrangler-accounts --profile work cf dns records list --zone example.com
 `;
   console.log(text);
   process.exit(exitCode);
@@ -458,6 +776,20 @@ function parseArgs(argv) {
       opts.apply = true;
     } else if (arg === "--deep" || arg === "--verify") {
       opts.deep = true;
+    } else if (arg === "--dry-run") {
+      opts.dryRun = true;
+    } else if (arg === "--no-verify") {
+      opts.noVerify = true;
+    } else if (arg === "--keep-native") {
+      opts.keepNative = true;
+    } else if (arg === "--delete-native") {
+      opts.deleteNative = true;
+    } else if (arg === "--clear") {
+      opts.clear = true;
+    } else if (arg === "--as") {
+      opts.as = argv[i + 1];
+      if (!opts.as) die("Missing value for --as");
+      i += 1;
     } else if (arg === "--config" || arg === "-c") {
       opts.config = argv[i + 1];
       if (!opts.config) die("Missing value for --config");
@@ -525,7 +857,8 @@ function syncProfile(name, configPath, profilesDir, identity) {
 
   const profileDir = path.join(profilesDir, name);
   const profileConfig = path.join(profileDir, "config.toml");
-  if (!fs.existsSync(profileConfig)) {
+  const isNative = getProfileBackend(profileDir) === "native";
+  if (!isNative && !fs.existsSync(profileConfig)) {
     die(`Profile not found: ${name}`);
   }
 
@@ -539,8 +872,113 @@ function syncProfile(name, configPath, profilesDir, identity) {
     );
   }
 
+  if (isNative) {
+    storeIntoNative(profilesDir, name, configPath, identity);
+    return;
+  }
   fs.copyFileSync(configPath, profileConfig);
   writeMeta(profileDir, name, configPath, identity);
+}
+
+/**
+ * save --force / sync into a native profile: overwrite wrangler's
+ * <name>.toml. An encrypted profile is refused — writing plaintext next to
+ * <name>.enc would be ignored by wrangler (it reads .enc first).
+ */
+function storeIntoNative(profilesDir, name, configPath, identity) {
+  const ctx = nativeContext(profilesDir, name);
+  if (ctx.state === "encrypted") {
+    die(
+      [
+        `Profile '${name}' is encrypted in the OS keychain (wrangler profile '${ctx.nativeName}'); refusing to overwrite it with a plaintext copy.`,
+        `该 profile 已加密存放，不会用明文覆盖。可选：`,
+        `  wrangler-accounts login ${name} --force      # re-authenticate, stays encrypted`,
+        `  wrangler-accounts unprotect ${name}         # then save/sync, then protect again`,
+      ].join("\n"),
+    );
+  }
+  native.writeFileAtomic(ctx.files.toml, fs.readFileSync(configPath));
+  updateMeta(ctx.profileDir, {
+    savedAt: new Date().toISOString(),
+    sourcePath: configPath,
+    ...(identity ? { identity } : {}),
+  });
+}
+
+/**
+ * `login <name>` for a native profile: `wrangler auth create <nativeName>`
+ * re-authenticates it in wrangler's own store (staying encrypted when it was),
+ * then the identity is read back through a bound shadow.
+ */
+function loginNative(name, profilesDir, opts) {
+  const ctx = nativeContext(profilesDir, name);
+  const probe = nativeProbe(profilesDir);
+  if (!probe.supported) {
+    die(`${probe.reason}\n${UNSUPPORTED_HINT}\nOr move it back first: wrangler-accounts unmigrate ${name}`, 2);
+  }
+  if (!opts.force && ctx.state !== "missing") {
+    const session = nativeSessionState(ctx);
+    const looksHealthy = ["valid", "refreshable", "encrypted"].includes(session.effective);
+    if (looksHealthy) {
+      die(
+        [
+          `Profile '${name}' already exists and looks healthy:`,
+          `  status:           ${session.effective}`,
+          `  expirationTime:   ${session.expirationTime || "(none)"}`,
+          `  wrangler profile: ${ctx.nativeName}`,
+          ``,
+          `'login' is DESTRUCTIVE — it opens a browser and overwrites the saved`,
+          `profile. If you only wanted to verify the profile works, run instead:`,
+          ``,
+          `  wrangler-accounts whoami --profile ${name}     # fast, no network`,
+          `  wrangler-accounts list --deep                  # authoritative, hits Cloudflare API`,
+          ``,
+          `If you really intend to re-authenticate, pass --force:`,
+          ``,
+          `  wrangler-accounts login ${name} --force`,
+        ].join("\n"),
+        1,
+      );
+    }
+  }
+  const encrypted = ctx.state === "encrypted";
+  const env = buildNativeEnv({
+    realHome: os.homedir(),
+    profile: name,
+    profileDir: ctx.profileDir,
+    baseEnv: process.env,
+    encrypted,
+    cloudflaredPath: findCloudflared(),
+  });
+  // With --json, keep stdout clean for our JSON: wrangler's output goes to stderr.
+  const res = spawnSync("wrangler", ["auth", "create", ctx.nativeName], {
+    stdio: opts.json ? ["inherit", 2, "inherit"] : "inherit",
+    env,
+  });
+  if (res.error) die(`Failed to run 'wrangler auth create': ${res.error.message}`);
+  if (res.status !== 0) die(`'wrangler auth create ${ctx.nativeName}' exited with code ${res.status}`);
+
+  const after = nativeContext(profilesDir, name);
+  const who = runBoundShadow({
+    profile: name,
+    nativeName: after.nativeName,
+    nativeFiles: after.files,
+    profileDir: after.profileDir,
+    realHome: os.homedir(),
+    command: "wrangler",
+    args: ["whoami"],
+    baseEnv: process.env,
+    captureStdout: true,
+    encrypted: after.state === "encrypted",
+  });
+  const identity = parseWranglerWhoamiOutput(`${who.stdout || ""}\n${who.stderr || ""}`);
+  if (!identity) die("Login succeeded but could not parse 'wrangler whoami' output");
+  updateMeta(ctx.profileDir, { identity, savedAt: new Date().toISOString() });
+  if (opts.json) {
+    console.log(JSON.stringify({ command: "login", name, profilesDir, overwritten: true, identity, backend: "native", nativeName: ctx.nativeName }, null, 2));
+  } else {
+    console.log(`Logged in and saved profile '${name}' (${describeIdentity(identity)}) (overwritten, wrangler profile '${ctx.nativeName}')`);
+  }
 }
 
 function main() {
@@ -594,9 +1032,17 @@ function main() {
     } catch (err) {
       if (err instanceof ResolveError) {
         if (err.code === "NO_PROFILE" && process.env.CLOUDFLARE_API_TOKEN) {
+          let anonCommand = "wrangler";
+          let anonArgs = rest;
+          if (rest[0] === "cf") {
+            const found = findCf();
+            if (!found || !found.path) die(cfMissingMessage(found), 2);
+            anonCommand = found.path;
+            anonArgs = rest.slice(1);
+          }
           const result = runAnonymousTokenMode({
-            command: "wrangler",
-            args: rest,
+            command: anonCommand,
+            args: anonArgs,
           });
           process.exit(result.exitCode);
         }
@@ -609,6 +1055,12 @@ function main() {
 
     // If positional was consumed as profile, drop it from wrangler argv
     const wranglerArgs = resolved.source === "positional" ? rest.slice(1) : rest;
+
+    // `wrangler-accounts --profile x cf ...` runs Cloudflare's cf CLI.
+    if (wranglerArgs[0] === "cf") {
+      const result = runCfForProfile({ resolved, profilesDir, args: wranglerArgs.slice(1) });
+      process.exit(result.exitCode);
+    }
 
     const result = runResolvedProfileCommand({
       resolved,
@@ -628,24 +1080,38 @@ function main() {
       const profileDir = path.join(profilesDir, name);
       const type = getProfileType(profileDir) || "oauth";
       const cfgPath = path.join(profileDir, "config.toml");
+      const backend = type === "oauth" ? getProfileBackend(profileDir) : null;
+      const nctx = backend === "native" ? nativeContext(profilesDir, name) : null;
       const session =
-        type === "token" ? readTokenSessionState() : readSessionState(cfgPath);
+        type === "token" ? readTokenSessionState()
+        : nctx ? nativeSessionState(nctx)
+        : readSessionState(cfgPath);
       const meta = readMeta(profileDir);
       const identity = getMetaIdentity(meta);
       const tokenCreds = type === "token" ? readTokenCredentials(profileDir) : null;
+      let credentialStore = "file";
+      if (type === "token") credentialStore = (tokenCreds && tokenCreds.credentialStore) || "file";
+      else if (nctx && nctx.state === "encrypted") credentialStore = (meta && meta.credentialStore) || backendName() || "keyring";
       return {
         name,
         type,
-        credentialStore: type === "token" ? (tokenCreds && tokenCreds.credentialStore) || "file" : "file",
+        credentialStore,
         isDefault: name === defaultName,
         isActive: name === activeName,
-        status: session.effective, // 'valid' | 'refreshable' | 'expired' | 'unknown' | 'token'
+        // 'valid' | 'refreshable' | 'expired' | 'unknown' | 'token'
+        // | 'encrypted' (native, keyring) | 'missing' (native, credentials gone)
+        status: session.effective,
         expirationTime: session.expirationTime,
         hasRefreshToken: session.hasRefreshToken,
         identity,
         description: (meta && meta.description) || null,
         verified: null,
         verifyError: null,
+        backend, // 'shadow' | 'native' | null (token)
+        nativeName: nctx ? nctx.nativeName : null,
+        credentialPath: type === "token" ? path.join(profileDir, "token.json")
+          : nctx ? (nctx.state === "encrypted" ? nctx.files.enc : nctx.files.toml)
+          : cfgPath,
       };
     });
 
@@ -662,6 +1128,16 @@ function main() {
       }
       const cloudflaredPath = findCloudflared();
       for (const e of entries) {
+        if (e.backend === "native") {
+          const probe = nativeProbe(profilesDir);
+          if (!probe.supported || e.status === "missing") {
+            e.verified = false;
+            e.verifyError = !probe.supported
+              ? `wrangler cannot use native profiles: ${probe.reason}`
+              : "native credentials missing (re-login with --force)";
+            continue;
+          }
+        }
         try {
           const resolved = { name: e.name, source: "deep" };
           const r = runResolvedProfileCommand({
@@ -713,14 +1189,16 @@ function main() {
     if (defaultName) console.log(`Default: ${defaultName}\n`);
     const rows = entries.map((e) => ({
       marker: e.isDefault ? "*" : " ",
-      name: `${e.name} [${e.type}]`,
+      name: `${e.name} [${e.type}${e.backend === "native" ? ", native" : ""}]`,
       status:
         e.status === "expired" ? "EXPIRED"
         : e.status === "refreshable" ? "valid*"
         : e.status === "valid" ? "valid"
         : e.status === "token" ? (e.credentialStore && e.credentialStore !== "file" ? `token (${e.credentialStore})` : "token")
+        : e.status === "encrypted" ? `encrypted (${e.credentialStore})`
+        : e.status === "missing" ? "MISSING"
         : "unknown",
-      expires: e.type === "token" ? "—" : formatExpiry(e.expirationTime),
+      expires: e.type === "token" || e.status === "encrypted" || e.status === "missing" ? "—" : formatExpiry(e.expirationTime),
       verified:
         e.verified === true ? "✓ ok"
         : e.verified === false ? `✗ ${e.verifyError || "failed"}`
@@ -775,6 +1253,11 @@ function main() {
         "        STATUS is file-only. For a live check against Cloudflare, pass --deep (slower, makes network calls).",
       );
     }
+    if (entries.some((e) => e.backend === "native")) {
+      console.log(
+        "        native = stored in wrangler's own profile store (also usable as 'wrangler --profile <name>') | encrypted = key in the OS keychain",
+      );
+    }
     return;
   }
 
@@ -782,7 +1265,16 @@ function main() {
     const { identity: currentIdentity, error: currentIdentityError } = loadCurrentIdentity();
     const profiles = listProfiles(profilesDir, { includeBackups });
     const active = getActiveProfile(profilesDir);
-    const exactMatch = findMatchingProfile(profilesDir, configPath, { includeBackups });
+    const plaintextCredentialPath = (name) => {
+      const dir = path.join(profilesDir, name);
+      if (getProfileBackend(dir) !== "native") return path.join(dir, "config.toml");
+      const nctx = nativeContext(profilesDir, name);
+      return nctx.state === "plaintext" ? nctx.files.toml : null;
+    };
+    const exactMatch = findMatchingProfile(profilesDir, configPath, {
+      includeBackups,
+      credentialPathFor: plaintextCredentialPath,
+    });
     const configSession = readSessionState(configPath);
     const identityMatches = findProfilesByIdentity(profilesDir, currentIdentity, { includeBackups });
     const matchingProfile = exactMatch || (identityMatches.length === 1 ? identityMatches[0] : null);
@@ -793,12 +1285,18 @@ function main() {
         const type = getProfileType(profileDir) || "oauth";
         const profileConfig = path.join(profileDir, "config.toml");
         const meta = readMeta(profileDir);
+        const backend = type === "oauth" ? getProfileBackend(profileDir) : null;
+        const nctx = backend === "native" ? nativeContext(profilesDir, name) : null;
         return [
           name,
           {
-            ...(type === "token" ? readTokenSessionState() : readSessionState(profileConfig)),
+            ...(type === "token" ? readTokenSessionState()
+              : nctx ? nativeSessionState(nctx)
+              : readSessionState(profileConfig)),
             type,
             identity: getMetaIdentity(meta),
+            backend,
+            nativeName: nctx ? nctx.nativeName : null,
           },
         ];
       })
@@ -807,7 +1305,7 @@ function main() {
       Boolean(currentIdentity) &&
       Boolean(matchingProfile) &&
       !exactMatch &&
-      filesEqual(configPath, path.join(profilesDir, matchingProfile, "config.toml")) === false;
+      filesEqual(configPath, plaintextCredentialPath(matchingProfile) || "") === false;
     const payload = {
       configPath,
       configExists: fs.existsSync(configPath),
@@ -852,10 +1350,13 @@ function main() {
         const state =
           profileSession.effective === "token"
             ? "token"
-            : profileSession.expired ? "expired" : "valid";
+            : profileSession.effective === "encrypted" || profileSession.effective === "missing"
+              ? profileSession.effective
+              : profileSession.expired ? "expired" : "valid";
         const suffix = profileSession.identity ? `, ${describeIdentity(profileSession.identity)}` : "";
         const expiry = profileSession.expirationTime || "(n/a)";
-        console.log(`- ${name} [${profileSession.type}]: ${expiry} (${state}${suffix ? suffix : ""})`);
+        const kind = profileSession.backend === "native" ? `${profileSession.type}, native` : profileSession.type;
+        console.log(`- ${name} [${kind}]: ${expiry} (${state}${suffix ? suffix : ""})`);
       }
     }
     return;
@@ -868,7 +1369,12 @@ function main() {
     ensureDir(profilesDir);
     const profileDir = path.join(profilesDir, name);
     const existed = fs.existsSync(profileDir);
-    saveProfile(name, configPath, profilesDir, opts.force, currentIdentity);
+    if (existed && opts.force && getProfileBackend(profileDir) === "native") {
+      if (!fs.existsSync(configPath)) die(`Config file not found: ${configPath}`);
+      storeIntoNative(profilesDir, name, configPath, currentIdentity);
+    } else {
+      saveProfile(name, configPath, profilesDir, opts.force, currentIdentity);
+    }
     if (opts.json) {
       console.log(
         JSON.stringify(
@@ -912,15 +1418,25 @@ function main() {
   if (command === "protect" || command === "unprotect") {
     const name = rest[1];
     if (!name && !opts.all) die(`Usage: wrangler-accounts ${command} <name> | --all`);
-    const names = opts.all
-      ? listProfiles(profilesDir).filter((n) => getProfileType(path.join(profilesDir, n)) === "token")
-      : [name];
-    const fn = command === "protect" ? protectTokenProfile : unprotectTokenProfile;
+    // Token profiles: API token -> OS secret store (1.8.0).
+    // OAuth profiles: wrangler's own keyring encryption of the native profile
+    // (migrating to native first), see lib/migrate.js.
+    const names = opts.all ? listProfiles(profilesDir) : [name];
     const results = [];
     let failed = false;
     for (const n of names) {
       try {
-        results.push(fn(profilesDir, n));
+        const type = getProfileType(path.join(profilesDir, n));
+        if (type === "oauth") {
+          const probe = getProfileBackend(path.join(profilesDir, n)) === "native" ? undefined : nativeProbe(profilesDir);
+          results.push(
+            command === "protect"
+              ? protectOAuthProfile(profilesDir, n, { probe, verify: !opts.noVerify })
+              : unprotectOAuthProfile(profilesDir, n),
+          );
+        } else {
+          results.push((command === "protect" ? protectTokenProfile : unprotectTokenProfile)(profilesDir, n));
+        }
       } catch (err) {
         failed = true;
         results.push({ name: n, status: "error", error: err.message });
@@ -934,6 +1450,17 @@ function main() {
       for (const r of results) {
         const detail = r.error || r.reason || (r.store ? `(${r.store})` : "");
         console.log(`${r.name}: ${r.status}${detail ? ` ${detail}` : ""}`);
+        if (r.warning) console.log(`  note: ${r.warning}`);
+      }
+      const oauthProtected = results.filter((r) => r.nativeName && (r.status === "protected" || r.status === "already") && command === "protect");
+      if (oauthProtected.length) {
+        const n0 = oauthProtected[0].nativeName;
+        console.log("");
+        console.log("OAuth credentials are now encrypted by wrangler (key in the OS keychain); no plaintext file is left.");
+        console.log("OAuth 凭据已由 wrangler 加密，密钥在系统钥匙串里，磁盘上不再有明文。wrangler-accounts 的用法不变。");
+        console.log(`Bare wrangler needs keyring mode to read it: wrangler auth keyring enable  (or CLOUDFLARE_AUTH_USE_KEYRING=true wrangler --profile ${n0} ...)`);
+        console.log("WARNING / 注意: 'wrangler auth keyring disable' deletes EVERY encrypted wrangler profile. To go back to plaintext use 'wrangler-accounts unprotect <name>'.");
+        console.log("'wrangler auth keyring disable' 会删除所有加密的 wrangler profile；要恢复明文请用 'wrangler-accounts unprotect <name>'。");
       }
     }
     process.exit(failed ? 1 : 0);
@@ -998,6 +1525,11 @@ function main() {
         ].join("\n"),
         1,
       );
+    }
+
+    if (getProfileBackend(path.join(profilesDir, name)) === "native") {
+      loginNative(name, profilesDir, opts);
+      return;
     }
 
     // Guard 2: refuse to overwrite an existing profile that's already
@@ -1222,7 +1754,27 @@ function main() {
   if (command === "remove") {
     const name = rest[1];
     if (!name) die("Missing profile name for remove");
+    const isNative = isValidName(name) && getProfileBackend(path.join(profilesDir, name)) === "native";
+    const nctx = isNative ? nativeContext(profilesDir, name) : null;
     removeProfile(name, profilesDir);
+    // A native profile is a wrangler credential the user can also use
+    // directly (wrangler --profile). Keep it unless explicitly asked.
+    let nativeRemoved = [];
+    let nativeKeyRemoved = false;
+    if (nctx && opts.deleteNative) {
+      for (const f of [nctx.files.toml, nctx.files.enc]) {
+        if (fs.existsSync(f)) {
+          fs.unlinkSync(f);
+          nativeRemoved.push(f);
+        }
+      }
+      if (nctx.state === "encrypted") {
+        try {
+          nativeKeyRemoved = native.deleteNativeKey(nctx.nativeName);
+        } catch {}
+      }
+    }
+    const bindings = nctx ? native.bindingsFor(nctx.nativeName) : [];
     if (opts.json) {
       console.log(
         JSON.stringify(
@@ -1230,6 +1782,15 @@ function main() {
             command: "remove",
             name,
             profilesDir,
+            ...(nctx
+              ? {
+                  nativeName: nctx.nativeName,
+                  nativeKept: !opts.deleteNative && nctx.state !== "missing",
+                  nativeRemoved,
+                  nativeKeyRemoved,
+                  bindings,
+                }
+              : {}),
           },
           null,
           2
@@ -1237,8 +1798,103 @@ function main() {
       );
     } else {
       console.log(`Removed profile '${name}'`);
+      if (nctx && !opts.deleteNative && nctx.state !== "missing") {
+        console.log(
+          `Kept wrangler's native profile '${nctx.nativeName}' (${nctx.state === "encrypted" ? nctx.files.enc : nctx.files.toml}); 'wrangler --profile ${nctx.nativeName}' still works.`,
+        );
+        console.log(`wrangler 原生 profile '${nctx.nativeName}' 仍保留。要一并删除：wrangler auth delete ${nctx.nativeName}`);
+      } else if (nativeRemoved.length) {
+        console.log(`Deleted wrangler's native profile '${nctx.nativeName}'${nativeKeyRemoved ? " and its keychain key" : ""}.`);
+      }
+      if (bindings.length) {
+        console.log(`Directories still bound to '${nctx.nativeName}' (wrangler auth deactivate <dir>):`);
+        for (const b of bindings) console.log(`  ${b}`);
+      }
     }
     return;
+  }
+
+  if (command === "migrate" || command === "unmigrate") {
+    const name = rest[1];
+    if (!name && !opts.all) {
+      die(`Usage: wrangler-accounts ${command} <name> | --all${command === "migrate" ? " [--as <wrangler-name>] [--dry-run] [--force] [--no-verify]" : " [--keep-native]"}`);
+    }
+    if (opts.all && opts.as) die("--as only works with a single profile");
+    if (command === "migrate") {
+      const probe = nativeProbe(profilesDir);
+      if (!probe.supported) {
+        die(`${probe.reason}\n${UNSUPPORTED_HINT}`, 2);
+      }
+    }
+    const names = opts.all
+      ? listProfiles(profilesDir).filter((n) => getProfileType(path.join(profilesDir, n)) === "oauth")
+      : [name];
+    const results = [];
+    let failed = false;
+    for (const n of names) {
+      try {
+        results.push(
+          command === "migrate"
+            ? migrateProfile(profilesDir, n, {
+                as: opts.as,
+                force: opts.force,
+                dryRun: opts.dryRun,
+                verify: !opts.noVerify,
+                probe: nativeProbe(profilesDir),
+              })
+            : unmigrateProfile(profilesDir, n, { keepNative: opts.keepNative }),
+        );
+      } catch (err) {
+        failed = true;
+        const exit = err instanceof MigrateError && err.code === "PROFILE_NOT_FOUND" && !opts.all ? 2 : null;
+        if (exit && !opts.json) die(err.message, exit);
+        results.push({ name: n, status: "error", error: err.message, code: err.code || null });
+      }
+    }
+    if (opts.json) {
+      console.log(JSON.stringify({ command, dryRun: Boolean(opts.dryRun), results }, null, 2));
+      process.exit(failed ? 1 : 0);
+    }
+    if (!results.length) console.log("No OAuth profiles found.");
+    for (const r of results) {
+      if (r.status === "error") {
+        console.log(`${r.name}: error\n  ${String(r.error).split("\n").join("\n  ")}`);
+      } else if (r.status === "dry-run") {
+        console.log(`${r.name}: would copy ${r.source}`);
+        console.log(`  -> wrangler profile '${r.nativeName}' at ${r.target}${r.replaces ? ` (replacing the existing ${r.replaces} profile, backed up first)` : ""}`);
+        console.log(`  then verify with 'wrangler auth token --profile ${r.nativeName}' and remove the old copy.`);
+      } else if (r.status === "migrated") {
+        console.log(`${r.name}: migrated -> wrangler profile '${r.nativeName}' (${r.encrypted ? "encrypted" : r.target})${r.verified ? ", verified by wrangler" : ", NOT verified (--no-verify)"}`);
+      } else if (r.status === "unmigrated") {
+        console.log(`${r.name}: moved back to wrangler-accounts (shadow HOME)${r.keptNative ? `; wrangler profile '${r.nativeName}' kept (now a separate copy)` : `; wrangler profile '${r.nativeName}' removed${r.keyRemoved ? " with its keychain key" : ""}`}`);
+        if (r.bindings && r.bindings.length) {
+          console.log(`  directories still bound to '${r.nativeName}' (remove with: wrangler auth deactivate <dir>):`);
+          for (const b of r.bindings) console.log(`    ${b}`);
+        }
+      } else {
+        console.log(`${r.name}: ${r.status}${r.reason ? ` (${r.reason})` : r.nativeName ? ` (wrangler profile '${r.nativeName}')` : ""}`);
+      }
+    }
+    const migrated = results.filter((r) => r.status === "migrated");
+    if (migrated.length) {
+      const n0 = migrated[0];
+      console.log("");
+      console.log(`Done. wrangler-accounts commands work exactly as before. The profile is now also a native wrangler profile:`);
+      console.log(`迁移完成，wrangler-accounts 用法不变；现在也可以直接用 wrangler 原生 profile：`);
+      console.log(`  wrangler --profile ${n0.nativeName} deploy`);
+      console.log(`  wrangler auth activate ${n0.nativeName}      # bind the current directory`);
+      console.log(`Encrypt it at rest: wrangler-accounts protect ${n0.name}    Roll back: wrangler-accounts unmigrate ${n0.name}`);
+    }
+    process.exit(failed ? 1 : 0);
+  }
+
+  if (command === "__is-cloudflare-cf") {
+    // Internal helper for the guard hook and the cf PATH shim: exit 0 only
+    // when the given (or first on PATH) cf is Cloudflare's CLI.
+    const target = rest[1];
+    if (target) process.exit(isCloudflareCf(target) ? 0 : 1);
+    const found = findCf();
+    process.exit(found && found.path ? 0 : 1);
   }
 
   if (command === "whoami") {
@@ -1287,6 +1943,8 @@ function main() {
             source: resolved.source,
             type: profileType,
             identity,
+            backend: getProfileBackend(profileDir),
+            nativeName: (meta && meta.nativeName) || null,
           },
           null,
           2
@@ -1368,6 +2026,13 @@ function main() {
       cmdArgs = ["-i"];
     }
 
+    // `exec x -- cf ...` with Cloudflare's cf: same as `--profile x cf ...`.
+    const cfPath = dashDashIdx >= 0 ? resolveExecCf(cmd) : null;
+    if (cfPath) {
+      const result = runCfForProfile({ resolved, profilesDir, args: cmdArgs, cfPath });
+      process.exit(result.exitCode);
+    }
+
     const result = runResolvedProfileCommand({
       resolved,
       profilesDir,
@@ -1430,6 +2095,17 @@ function main() {
         die(`Failed to install shim: ${err.message}`);
       }
       const realWrangler = findRealWrangler({ shimDir });
+      // Cover bare `cf` too, but only when the cf on PATH is Cloudflare's —
+      // Cloud Foundry's cf is never shadowed.
+      const cfFound = findCloudflareCf({ pathEnv: process.env.PATH || "", skipDirs: [shimDir] });
+      let cfShimPath = null;
+      if (cfFound && cfFound.path && cfFound.via === "cf") {
+        try {
+          cfShimPath = installCfShim({ shimDir });
+        } catch (err) {
+          process.stderr.write(`[wrangler-accounts] could not install the cf shim: ${err.message}\n`);
+        }
+      }
       const shell = detectShell(process.env);
       const line = pathLine(shimDir, shell);
       let rcPath = null;
@@ -1450,7 +2126,7 @@ function main() {
       if (opts.json) {
         console.log(
           JSON.stringify(
-            { command: "shim", action: "install", shimPath, shimDir, shell, pathLine: line, realWrangler, rcPath, rcApplied },
+            { command: "shim", action: "install", shimPath, shimDir, shell, pathLine: line, realWrangler, rcPath, rcApplied, cfShimPath },
             null,
             2,
           ),
@@ -1458,6 +2134,7 @@ function main() {
         return;
       }
       console.log(`Installed wrangler shim: ${shimPath}`);
+      if (cfShimPath) console.log(`Installed cf shim (Cloudflare's cf detected): ${cfShimPath}`);
       if (!realWrangler) {
         console.log(
           "Warning: no real 'wrangler' found on PATH yet. Install it with 'npm i -g wrangler'.",
@@ -1517,6 +2194,7 @@ function main() {
       console.log(`Shim dir on PATH: ${status.onPath ? "yes" : "no"}`);
       console.log(`Active (intercepts bare wrangler): ${status.active ? "yes" : "no"}`);
       console.log(`Real wrangler: ${status.realWrangler || "(none found)"}`);
+      if (status.cfShimInstalled) console.log(`cf shim: installed (${status.cfShimPath})`);
       if (status.installed && !status.active) {
         console.log(
           "\nThe shim is installed but not active — its directory is not ahead of the real",

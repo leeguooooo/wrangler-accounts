@@ -475,19 +475,20 @@
     "exitCode": 0,
     "json": {
       "argv": [
-        "ci",
         "deploy"
       ],
       "env": {
-        "WRANGLER_PROFILE": "work",
-        "CLOUDFLARE_ACCOUNT_ID": "0123456789abcdef0123456789abcdef",
+        "WRANGLER_PROFILE": "ci",
+        "CLOUDFLARE_API_TOKEN": "tok-ci",
+        "CLOUDFLARE_ACCOUNT_ID": "acct-ci",
         "WA_PASSTHROUGH": "1",
         "WRANGLER_SEND_METRICS": "false"
       },
       "homeIsReal": false,
-      "shadowDefaultToml": "oauth_token = \"oauth-fixture\"\nrefresh_token = \"refresh-fixture\"\nexpiration_time = \"<TS>\"\nscopes = [\"account:read\"]\n"
+      "shadowDefaultToml": ""
     },
-    "stderrLines": []
+    "stderrLines": [],
+    "_note": "1.9.0: positional shorthand now also matches token/native profiles when a default is set (1.8.0 fell back to the default profile)"
   },
   "run-ghost": {
     "exitCode": 2,

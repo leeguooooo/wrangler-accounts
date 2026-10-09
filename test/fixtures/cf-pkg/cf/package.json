@@ -1,0 +1,7 @@
+{
+  "name": "cf",
+  "version": "1.0.0-beta.13",
+  "description": "The Cloudflare CLI (test fixture)",
+  "repository": { "type": "git", "url": "git+https://github.com/cloudflare/cf.git", "directory": "packages/cli" },
+  "bin": { "cf": "./bin/cf", "cloudflare": "./bin/cf" }
+}
