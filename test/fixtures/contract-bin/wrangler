@@ -1,0 +1,22 @@
+#!/bin/sh
+# Contract-test fake wrangler. `whoami` prints a parseable identity; anything
+# else prints one JSON line describing what it was called with.
+if [ "$1" = "whoami" ]; then
+  cat <<'OUT'
+👋 You are logged in with an OAuth Token, associated with the email test@example.com.
+┌─────────────────────┬──────────────────────────────────┐
+│ Account Name        │ Account ID                       │
+├─────────────────────┼──────────────────────────────────┤
+│ Test Account        │ 0123456789abcdef0123456789abcdef │
+└─────────────────────┴──────────────────────────────────┘
+OUT
+  exit 0
+fi
+node -e '
+const e = process.env;
+const pick = ["WRANGLER_PROFILE","CLOUDFLARE_API_TOKEN","CLOUDFLARE_ACCOUNT_ID","CLOUDFLARE_API_KEY","CLOUDFLARE_EMAIL","WA_PASSTHROUGH","WRANGLER_SEND_METRICS"];
+const env = {}; for (const k of pick) if (e[k] !== undefined) env[k] = e[k];
+const homeIsReal = e.HOME === e.WA_CONTRACT_REAL_HOME;
+let cfg = null; try { cfg = require("fs").readFileSync(e.HOME + "/.wrangler/config/default.toml", "utf8"); } catch {}
+console.log(JSON.stringify({ argv: process.argv.slice(1), env, homeIsReal, shadowDefaultToml: cfg }));
+' -- "$@"

@@ -1,0 +1,929 @@
+{
+  "version": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "<VERSION>"
+    ],
+    "stderrLines": []
+  },
+  "version-json": {
+    "exitCode": 0,
+    "json": {
+      "name": "@leeguoo/wrangler-accounts",
+      "version": "<VERSION>"
+    },
+    "stderrLines": []
+  },
+  "help": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "wrangler-accounts - manage multiple Wrangler login profiles",
+      "Usage:",
+      "  wrangler-accounts <command> [options]",
+      "Commands:",
+      "  list",
+      "  status",
+      "  login <name>",
+      "  save <name>",
+      "  token-add <name> <api-token> <account-id> [--protect]",
+      "  protect <name> | --all  Move token profile secrets into the OS keychain",
+      "  unprotect <name> | --all",
+      "  sync <name>",
+      "  sync-active",
+      "  sync-default",
+      "  default [name | --unset]",
+      "  whoami [--profile <name>]",
+      "  exec <name> [-- <cmd> [args]]",
+      "  shim [install | uninstall | status] [--apply]",
+      "  remove <name>",
+      "Deprecated:",
+      "  use <name>              Prints migration guidance; use 'default' or '--profile' instead",
+      "Options:",
+      "  -c, --config <path>     Wrangler config path",
+      "  -p, --profiles <path>   Profiles directory",
+      "  --json                  JSON output for all commands",
+      "  --plain                 Plain output for list (one name per line)",
+      "  --include-backups       Include backup profiles in list/status",
+      "  -f, --force             Overwrite existing profile on save",
+      "  --protect               token-add: store the token in the OS keychain, not token.json",
+      "  --all                   protect/unprotect: every token profile",
+      "  -h, --help              Show help",
+      "  -v, --version           Print version",
+      "Env:",
+      "  WRANGLER_CONFIG_PATH",
+      "  WRANGLER_ACCOUNTS_DIR",
+      "  WRANGLER_ACCOUNTS_SHIM_DIR",
+      "  WRANGLER_ACCOUNTS_PROTECT_TOKENS=1   token-add defaults to --protect",
+      "  XDG_CONFIG_HOME",
+      "Examples:",
+      "  wrangler-accounts save work",
+      "  wrangler-accounts default work",
+      "  wrangler-accounts --profile work deploy",
+      "  wrangler-accounts shim install --apply"
+    ],
+    "stderrLines": []
+  },
+  "no-command": {
+    "exitCode": 1,
+    "stdoutLines": [
+      "wrangler-accounts - manage multiple Wrangler login profiles",
+      "Usage:",
+      "  wrangler-accounts <command> [options]",
+      "Commands:",
+      "  list",
+      "  status",
+      "  login <name>",
+      "  save <name>",
+      "  token-add <name> <api-token> <account-id> [--protect]",
+      "  protect <name> | --all  Move token profile secrets into the OS keychain",
+      "  unprotect <name> | --all",
+      "  sync <name>",
+      "  sync-active",
+      "  sync-default",
+      "  default [name | --unset]",
+      "  whoami [--profile <name>]",
+      "  exec <name> [-- <cmd> [args]]",
+      "  shim [install | uninstall | status] [--apply]",
+      "  remove <name>",
+      "Deprecated:",
+      "  use <name>              Prints migration guidance; use 'default' or '--profile' instead",
+      "Options:",
+      "  -c, --config <path>     Wrangler config path",
+      "  -p, --profiles <path>   Profiles directory",
+      "  --json                  JSON output for all commands",
+      "  --plain                 Plain output for list (one name per line)",
+      "  --include-backups       Include backup profiles in list/status",
+      "  -f, --force             Overwrite existing profile on save",
+      "  --protect               token-add: store the token in the OS keychain, not token.json",
+      "  --all                   protect/unprotect: every token profile",
+      "  -h, --help              Show help",
+      "  -v, --version           Print version",
+      "Env:",
+      "  WRANGLER_CONFIG_PATH",
+      "  WRANGLER_ACCOUNTS_DIR",
+      "  WRANGLER_ACCOUNTS_SHIM_DIR",
+      "  WRANGLER_ACCOUNTS_PROTECT_TOKENS=1   token-add defaults to --protect",
+      "  XDG_CONFIG_HOME",
+      "Examples:",
+      "  wrangler-accounts save work",
+      "  wrangler-accounts default work",
+      "  wrangler-accounts --profile work deploy",
+      "  wrangler-accounts shim install --apply"
+    ],
+    "stderrLines": []
+  },
+  "list-json": {
+    "exitCode": 0,
+    "json": [
+      {
+        "name": "ci",
+        "type": "token",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "token",
+        "expirationTime": null,
+        "hasRefreshToken": false,
+        "identity": null,
+        "description": null,
+        "verified": null,
+        "verifyError": null
+      },
+      {
+        "name": "stale",
+        "type": "oauth",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "expired",
+        "expirationTime": "<TS>",
+        "hasRefreshToken": false,
+        "identity": null,
+        "description": null,
+        "verified": null,
+        "verifyError": null
+      },
+      {
+        "name": "work",
+        "type": "oauth",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "valid",
+        "expirationTime": "<TS>",
+        "hasRefreshToken": true,
+        "identity": {
+          "email": "test@example.com",
+          "accountName": "Test Account",
+          "accountId": "0123456789abcdef0123456789abcdef"
+        },
+        "description": "main account",
+        "verified": null,
+        "verifyError": null
+      }
+    ],
+    "stderrLines": []
+  },
+  "list-plain": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "ci",
+      "stale",
+      "work"
+    ],
+    "stderrLines": []
+  },
+  "list-text": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "  NAME           STATUS   EXPIRES                 IDENTITY  NOTE",
+      "  ci [token]     token    —                       (no identity)  ",
+      "  stale [oauth]  EXPIRED  <REL> ago  (no identity)  ",
+      "  work [oauth]   valid    in <REL>  test@example.com / 0123456789abcdef0123456789abcdef  main account",
+      "Legend: * = default profile | STATUS valid = access token fresh | valid* = access token expired but refresh_token will auto-refresh",
+      "        EXPIRED = access token expired and no refresh_token, must 'login <name>' again | unknown = no expiration_time saved",
+      "        STATUS is file-only. For a live check against Cloudflare, pass --deep (slower, makes network calls)."
+    ],
+    "stderrLines": []
+  },
+  "list-backups-json": {
+    "exitCode": 0,
+    "json": [
+      {
+        "name": "__backup-20260101-000000",
+        "type": "oauth",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "valid",
+        "expirationTime": "<TS>",
+        "hasRefreshToken": true,
+        "identity": null,
+        "description": null,
+        "verified": null,
+        "verifyError": null
+      },
+      {
+        "name": "ci",
+        "type": "token",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "token",
+        "expirationTime": null,
+        "hasRefreshToken": false,
+        "identity": null,
+        "description": null,
+        "verified": null,
+        "verifyError": null
+      },
+      {
+        "name": "stale",
+        "type": "oauth",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "expired",
+        "expirationTime": "<TS>",
+        "hasRefreshToken": false,
+        "identity": null,
+        "description": null,
+        "verified": null,
+        "verifyError": null
+      },
+      {
+        "name": "work",
+        "type": "oauth",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "valid",
+        "expirationTime": "<TS>",
+        "hasRefreshToken": true,
+        "identity": {
+          "email": "test@example.com",
+          "accountName": "Test Account",
+          "accountId": "0123456789abcdef0123456789abcdef"
+        },
+        "description": "main account",
+        "verified": null,
+        "verifyError": null
+      }
+    ],
+    "stderrLines": []
+  },
+  "list-deep-json": {
+    "exitCode": 3,
+    "stdoutLines": [],
+    "stderrJson": {
+      "error": "Profile 'stale' has expired Wrangler OAuth credentials and no refresh_token to renew them (expiration_time: <TS>). Run 'wrangler-accounts login stale' to re-authenticate."
+    }
+  },
+  "status-json": {
+    "exitCode": 0,
+    "json": {
+      "configPath": "<ROOT>/home/.wrangler/config/default.toml",
+      "configExists": true,
+      "configSession": {
+        "expirationTime": "<TS>",
+        "expired": false,
+        "hasRefreshToken": true,
+        "effective": "valid"
+      },
+      "currentIdentity": {
+        "email": "test@example.com",
+        "accountName": "Test Account",
+        "accountId": "0123456789abcdef0123456789abcdef"
+      },
+      "currentIdentityError": null,
+      "profilesDir": "<ROOT>/profiles",
+      "profileCount": 3,
+      "profiles": [
+        "ci",
+        "stale",
+        "work"
+      ],
+      "profileStates": {
+        "ci": {
+          "expirationTime": null,
+          "expired": null,
+          "hasRefreshToken": false,
+          "effective": "token",
+          "type": "token",
+          "identity": null
+        },
+        "stale": {
+          "expirationTime": "<TS>",
+          "expired": true,
+          "hasRefreshToken": false,
+          "effective": "expired",
+          "type": "oauth",
+          "identity": null
+        },
+        "work": {
+          "expirationTime": "<TS>",
+          "expired": false,
+          "hasRefreshToken": true,
+          "effective": "valid",
+          "type": "oauth",
+          "identity": {
+            "email": "test@example.com",
+            "accountName": "Test Account",
+            "accountId": "0123456789abcdef0123456789abcdef"
+          }
+        }
+      },
+      "activeProfile": null,
+      "matchingProfile": "work",
+      "matchType": "hash",
+      "syncAvailable": false
+    },
+    "stderrLines": []
+  },
+  "status-text": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "Config: <ROOT>/home/.wrangler/config/default.toml (exists)",
+      "Config session: <TS> (valid)",
+      "Config identity: test@example.com / 0123456789abcdef0123456789abcdef",
+      "Profiles: <ROOT>/profiles (3)",
+      "Active: -",
+      "Match: work (hash)",
+      "- ci [token]: (n/a) (token)",
+      "- stale [oauth]: <TS> (expired)",
+      "- work [oauth]: <TS> (valid, test@example.com / 0123456789abcdef0123456789abcdef)"
+    ],
+    "stderrLines": []
+  },
+  "whoami-work-json": {
+    "exitCode": 0,
+    "json": {
+      "command": "whoami",
+      "profile": "work",
+      "source": "cli",
+      "type": "oauth",
+      "identity": {
+        "email": "test@example.com",
+        "accountName": "Test Account",
+        "accountId": "0123456789abcdef0123456789abcdef"
+      }
+    },
+    "stderrLines": []
+  },
+  "whoami-positional": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "work [cli]: test@example.com / 0123456789abcdef0123456789abcdef"
+    ],
+    "stderrLines": []
+  },
+  "whoami-token": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "👋 You are logged in with an OAuth Token, associated with the email test@example.com.",
+      "┌─────────────────────┬──────────────────────────────────┐",
+      "│ Account Name        │ Account ID                       │",
+      "├─────────────────────┼──────────────────────────────────┤",
+      "│ Test Account        │ 0123456789abcdef0123456789abcdef │",
+      "└─────────────────────┴──────────────────────────────────┘"
+    ],
+    "stderrLines": []
+  },
+  "whoami-missing": {
+    "exitCode": 2,
+    "stdoutLines": [],
+    "stderrJson": {
+      "error": "Profile not found: ghost"
+    }
+  },
+  "default-none": {
+    "exitCode": 1,
+    "stdoutLines": [
+      "(no default set)"
+    ],
+    "stderrLines": []
+  },
+  "default-none-json": {
+    "exitCode": 0,
+    "json": {
+      "command": "default",
+      "name": null
+    },
+    "stderrLines": []
+  },
+  "default-set": {
+    "exitCode": 0,
+    "json": {
+      "command": "default",
+      "name": "work"
+    },
+    "stderrLines": []
+  },
+  "default-get": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "work"
+    ],
+    "stderrLines": []
+  },
+  "default-ghost": {
+    "exitCode": 2,
+    "stdoutLines": [],
+    "stderrLines": [
+      "Error: Profile not found: ghost"
+    ]
+  },
+  "run-default": {
+    "exitCode": 0,
+    "json": {
+      "argv": [
+        "deploy",
+        "--env",
+        "prod"
+      ],
+      "env": {
+        "WRANGLER_PROFILE": "work",
+        "CLOUDFLARE_ACCOUNT_ID": "0123456789abcdef0123456789abcdef",
+        "WA_PASSTHROUGH": "1",
+        "WRANGLER_SEND_METRICS": "false"
+      },
+      "homeIsReal": false,
+      "shadowDefaultToml": "oauth_token = \"oauth-fixture\"\nrefresh_token = \"refresh-fixture\"\nexpiration_time = \"<TS>\"\nscopes = [\"account:read\"]\n"
+    },
+    "stderrLines": []
+  },
+  "run-profile-flag": {
+    "exitCode": 0,
+    "json": {
+      "argv": [
+        "kv",
+        "namespace",
+        "list"
+      ],
+      "env": {
+        "WRANGLER_PROFILE": "ci",
+        "CLOUDFLARE_API_TOKEN": "tok-ci",
+        "CLOUDFLARE_ACCOUNT_ID": "acct-ci",
+        "WA_PASSTHROUGH": "1",
+        "WRANGLER_SEND_METRICS": "false"
+      },
+      "homeIsReal": false,
+      "shadowDefaultToml": ""
+    },
+    "stderrLines": []
+  },
+  "run-profile-after": {
+    "exitCode": 0,
+    "json": {
+      "argv": [
+        "deploy",
+        "--config",
+        "x.toml"
+      ],
+      "env": {
+        "WRANGLER_PROFILE": "work",
+        "CLOUDFLARE_ACCOUNT_ID": "0123456789abcdef0123456789abcdef",
+        "WA_PASSTHROUGH": "1",
+        "WRANGLER_SEND_METRICS": "false"
+      },
+      "homeIsReal": false,
+      "shadowDefaultToml": "oauth_token = \"oauth-fixture\"\nrefresh_token = \"refresh-fixture\"\nexpiration_time = \"<TS>\"\nscopes = [\"account:read\"]\n"
+    },
+    "stderrLines": []
+  },
+  "run-positional": {
+    "exitCode": 0,
+    "json": {
+      "argv": [
+        "ci",
+        "deploy"
+      ],
+      "env": {
+        "WRANGLER_PROFILE": "work",
+        "CLOUDFLARE_ACCOUNT_ID": "0123456789abcdef0123456789abcdef",
+        "WA_PASSTHROUGH": "1",
+        "WRANGLER_SEND_METRICS": "false"
+      },
+      "homeIsReal": false,
+      "shadowDefaultToml": "oauth_token = \"oauth-fixture\"\nrefresh_token = \"refresh-fixture\"\nexpiration_time = \"<TS>\"\nscopes = [\"account:read\"]\n"
+    },
+    "stderrLines": []
+  },
+  "run-ghost": {
+    "exitCode": 2,
+    "stdoutLines": [],
+    "stderrLines": [
+      "Error: Profile not found: ghost"
+    ]
+  },
+  "run-expired": {
+    "exitCode": 3,
+    "stdoutLines": [],
+    "stderrLines": [
+      "Error: Profile 'stale' has expired Wrangler OAuth credentials and no refresh_token to renew them (expiration_time: <TS>). Run 'wrangler-accounts login stale' to re-authenticate."
+    ]
+  },
+  "exec-env": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "P=work A=0123456789abcdef0123456789abcdef T=none PT=1"
+    ],
+    "stderrLines": []
+  },
+  "exec-token-env": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "P=ci A=acct-ci T=tok-ci"
+    ],
+    "stderrLines": []
+  },
+  "exec-missing-cmd": {
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderrLines": [
+      "Error: No command given after --"
+    ]
+  },
+  "exec-ghost": {
+    "exitCode": 2,
+    "stdoutLines": [],
+    "stderrLines": [
+      "Error: Profile not found: ghost"
+    ]
+  },
+  "note-get": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "main account"
+    ],
+    "stderrLines": []
+  },
+  "note-set": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "Note set for profile 'ci'."
+    ],
+    "stderrLines": []
+  },
+  "note-get-ci": {
+    "exitCode": 0,
+    "stdoutLines": [
+      "ci token"
+    ],
+    "stderrLines": []
+  },
+  "use": {
+    "exitCode": 2,
+    "stdoutLines": [],
+    "stderrLines": [
+      "Error: The 'use' command is no longer supported because it was ambiguous and rewrote Wrangler's global config.",
+      "Use 'wrangler-accounts default <name>' for a persistent default profile.",
+      "Use 'wrangler-accounts --profile <name> <wrangler-args...>' for a one-shot command.",
+      "Use 'wrangler-accounts exec <name>' for an interactive subshell."
+    ]
+  },
+  "unknown-shim-action": {
+    "exitCode": 2,
+    "stdoutLines": [],
+    "stderrLines": [
+      "Error: Unknown shim action: bogus. Use install, uninstall, or status."
+    ]
+  },
+  "shim-status-json": {
+    "exitCode": 0,
+    "json": {
+      "command": "shim",
+      "action": "status",
+      "installed": false,
+      "shimDir": "<ROOT>/shims",
+      "shimPath": "<ROOT>/shims/wrangler",
+      "onPath": false,
+      "active": false,
+      "realWrangler": "<REPO>/test/fixtures/contract-bin/wrangler"
+    },
+    "stderrLines": []
+  },
+  "gc-json": {
+    "exitCode": 0,
+    "json": {
+      "command": "gc",
+      "removed": []
+    },
+    "stderrLines": []
+  },
+  "login-non-tty": {
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderrLines": [
+      "Error: 'login' requires an interactive terminal — wrangler will open a browser",
+      "and wait for authorization. Stdin is not a TTY here.",
+      "If you are an AI agent or script trying to verify a profile is",
+      "working, do NOT use 'login'. Use one of these instead:",
+      "  wrangler-accounts whoami --profile newone    # static check (meta.json)",
+      "  wrangler-accounts list --deep                 # live check (network call)",
+      "If you really need to re-authenticate this profile non-interactively,",
+      "pass --force to bypass this guard (the OAuth flow will still need a",
+      "browser to complete)."
+    ]
+  },
+  "token-add": {
+    "exitCode": 0,
+    "json": {
+      "command": "token-add",
+      "name": "ci2",
+      "protected": false,
+      "credentialStore": null
+    },
+    "stderrLines": []
+  },
+  "token-add-dup": {
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderrLines": [
+      "Error: Profile exists: ci2 (use --force to overwrite)"
+    ]
+  },
+  "protect-ci2": {
+    "exitCode": 0,
+    "json": {
+      "command": "protect",
+      "results": [
+        {
+          "name": "ci2",
+          "status": "protected",
+          "store": "file:<ROOT>/store"
+        }
+      ]
+    },
+    "stderrLines": []
+  },
+  "protect-oauth": {
+    "exitCode": 0
+  },
+  "list-after-protect": {
+    "exitCode": 0,
+    "json": [
+      {
+        "name": "ci",
+        "type": "token",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "token",
+        "expirationTime": null,
+        "hasRefreshToken": false,
+        "identity": null,
+        "description": "ci token",
+        "verified": null,
+        "verifyError": null
+      },
+      {
+        "name": "ci2",
+        "type": "token",
+        "credentialStore": "file:<ROOT>/store",
+        "isDefault": false,
+        "isActive": false,
+        "status": "token",
+        "expirationTime": null,
+        "hasRefreshToken": false,
+        "identity": null,
+        "description": null,
+        "verified": null,
+        "verifyError": null
+      },
+      {
+        "name": "stale",
+        "type": "oauth",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "expired",
+        "expirationTime": "<TS>",
+        "hasRefreshToken": false,
+        "identity": null,
+        "description": null,
+        "verified": null,
+        "verifyError": null
+      },
+      {
+        "name": "work",
+        "type": "oauth",
+        "credentialStore": "file",
+        "isDefault": true,
+        "isActive": false,
+        "status": "valid",
+        "expirationTime": "<TS>",
+        "hasRefreshToken": true,
+        "identity": {
+          "email": "test@example.com",
+          "accountName": "Test Account",
+          "accountId": "0123456789abcdef0123456789abcdef"
+        },
+        "description": "main account",
+        "verified": null,
+        "verifyError": null
+      }
+    ],
+    "stderrLines": []
+  },
+  "run-protected-token": {
+    "exitCode": 0,
+    "json": {
+      "argv": [
+        "whoami-not",
+        "x"
+      ],
+      "env": {
+        "WRANGLER_PROFILE": "ci2",
+        "CLOUDFLARE_API_TOKEN": "tok-2",
+        "CLOUDFLARE_ACCOUNT_ID": "acct-2",
+        "WA_PASSTHROUGH": "1",
+        "WRANGLER_SEND_METRICS": "false"
+      },
+      "homeIsReal": false,
+      "shadowDefaultToml": ""
+    },
+    "stderrLines": []
+  },
+  "unprotect-ci2": {
+    "exitCode": 0,
+    "json": {
+      "command": "unprotect",
+      "results": [
+        {
+          "name": "ci2",
+          "status": "unprotected",
+          "store": "file:<ROOT>/store",
+          "secretRemoved": true
+        }
+      ]
+    },
+    "stderrLines": []
+  },
+  "protect-all": {
+    "exitCode": 0
+  },
+  "unprotect-all": {
+    "exitCode": 0
+  },
+  "save-new": {
+    "exitCode": 0,
+    "json": {
+      "command": "save",
+      "name": "fromdefault",
+      "configPath": "<ROOT>/home/.wrangler/config/default.toml",
+      "profilesDir": "<ROOT>/profiles",
+      "overwritten": false,
+      "identity": {
+        "email": "test@example.com",
+        "accountName": "Test Account",
+        "accountId": "0123456789abcdef0123456789abcdef"
+      }
+    },
+    "stderrLines": []
+  },
+  "save-dup": {
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderrLines": [
+      "Error: Profile exists: fromdefault (use --force to overwrite)"
+    ]
+  },
+  "save-force": {
+    "exitCode": 0,
+    "json": {
+      "command": "save",
+      "name": "fromdefault",
+      "configPath": "<ROOT>/home/.wrangler/config/default.toml",
+      "profilesDir": "<ROOT>/profiles",
+      "overwritten": true,
+      "identity": {
+        "email": "test@example.com",
+        "accountName": "Test Account",
+        "accountId": "0123456789abcdef0123456789abcdef"
+      }
+    },
+    "stderrLines": []
+  },
+  "sync-work": {
+    "exitCode": 0,
+    "json": {
+      "command": "sync",
+      "name": "work",
+      "configPath": "<ROOT>/home/.wrangler/config/default.toml",
+      "profilesDir": "<ROOT>/profiles",
+      "identity": {
+        "email": "test@example.com",
+        "accountName": "Test Account",
+        "accountId": "0123456789abcdef0123456789abcdef"
+      }
+    },
+    "stderrLines": []
+  },
+  "sync-default": {
+    "exitCode": 0,
+    "json": {
+      "command": "sync-default",
+      "name": "work",
+      "configPath": "<ROOT>/home/.wrangler/config/default.toml",
+      "profilesDir": "<ROOT>/profiles",
+      "identity": {
+        "email": "test@example.com",
+        "accountName": "Test Account",
+        "accountId": "0123456789abcdef0123456789abcdef"
+      }
+    },
+    "stderrLines": []
+  },
+  "sync-active-legacy": {
+    "exitCode": 0,
+    "json": {
+      "command": "sync-active",
+      "name": "work",
+      "configPath": "<ROOT>/home/.wrangler/config/default.toml",
+      "profilesDir": "<ROOT>/profiles",
+      "identity": {
+        "email": "test@example.com",
+        "accountName": "Test Account",
+        "accountId": "0123456789abcdef0123456789abcdef"
+      }
+    },
+    "stderrLines": [
+      "[wrangler-accounts] 'sync-active' is deprecated. Use 'sync-default' instead. See README for details."
+    ]
+  },
+  "remove-ci2": {
+    "exitCode": 0,
+    "json": {
+      "command": "remove",
+      "name": "ci2",
+      "profilesDir": "<ROOT>/profiles"
+    },
+    "stderrLines": []
+  },
+  "remove-ghost": {
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderrLines": [
+      "Error: Profile not found: ghost"
+    ]
+  },
+  "default-unset": {
+    "exitCode": 0,
+    "json": {
+      "command": "default",
+      "unset": true
+    },
+    "stderrLines": []
+  },
+  "list-final": {
+    "exitCode": 0,
+    "json": [
+      {
+        "name": "ci",
+        "type": "token",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "token",
+        "expirationTime": null,
+        "hasRefreshToken": false,
+        "identity": null,
+        "description": "ci token",
+        "verified": null,
+        "verifyError": null
+      },
+      {
+        "name": "fromdefault",
+        "type": "oauth",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "valid",
+        "expirationTime": "<TS>",
+        "hasRefreshToken": true,
+        "identity": {
+          "email": "test@example.com",
+          "accountName": "Test Account",
+          "accountId": "0123456789abcdef0123456789abcdef"
+        },
+        "description": null,
+        "verified": null,
+        "verifyError": null
+      },
+      {
+        "name": "stale",
+        "type": "oauth",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "expired",
+        "expirationTime": "<TS>",
+        "hasRefreshToken": false,
+        "identity": null,
+        "description": null,
+        "verified": null,
+        "verifyError": null
+      },
+      {
+        "name": "work",
+        "type": "oauth",
+        "credentialStore": "file",
+        "isDefault": false,
+        "isActive": false,
+        "status": "valid",
+        "expirationTime": "<TS>",
+        "hasRefreshToken": true,
+        "identity": {
+          "email": "test@example.com",
+          "accountName": "Test Account",
+          "accountId": "0123456789abcdef0123456789abcdef"
+        },
+        "description": null,
+        "verified": null,
+        "verifyError": null
+      }
+    ],
+    "stderrLines": []
+  }
+}
