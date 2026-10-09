@@ -155,7 +155,9 @@ wrangler-accounts exec <name>                   # interactive subshell
 wrangler-accounts exec <name> -- <cmd> [args]   # one command
 
 wrangler-accounts login <name>                  # isolated OAuth login (browser)
-wrangler-accounts token-add <name> <api-token> <account-id> [--force]  # API token profile (no browser)
+wrangler-accounts token-add <name> <api-token> <account-id> [--force] [--protect]  # API token profile (no browser)
+wrangler-accounts protect <name> | --all          # move token secrets into the OS keychain
+wrangler-accounts unprotect <name> | --all        # move them back into token.json
 wrangler-accounts default [name | --unset]      # manage persistent default
 wrangler-accounts whoami [--profile <name>]     # show resolved identity
 wrangler-accounts list                          # fast table (name/status/expires/identity)
@@ -233,6 +235,25 @@ Token profiles appear in `list` with `[token]` type and `STATUS: token`. There's
 CLOUDFLARE_API_TOKEN=xxx CLOUDFLARE_ACCOUNT_ID=yyy wrangler-accounts deploy
 ```
 
+### Keep API tokens in the OS keychain (1.8.0+)
+
+By default a token profile's secret sits in `token.json` (mode 0600). You can move it into the OS secret store instead, so the file only holds the account ID:
+
+```bash
+wrangler-accounts token-add work CF_TOKEN ACCOUNT_ID --protect   # never written to disk
+wrangler-accounts protect work        # migrate an existing profile
+wrangler-accounts protect --all       # every token profile
+wrangler-accounts unprotect work      # put it back into token.json
+```
+
+- Stores: macOS Keychain (`security`) or Linux Secret Service (`secret-tool`). Elsewhere `protect` refuses and nothing changes.
+- Migration is non-destructive: the token is written to the store and read back, and only then removed from `token.json`. `unprotect` writes the file first and deletes the keychain item last.
+- At run time the token is read from the store into memory and handed to wrangler as `CLOUDFLARE_API_TOKEN`; it never touches disk. `list` shows `token (keychain)`.
+- Set `WRANGLER_ACCOUNTS_PROTECT_TOKENS=1` to make `token-add` protect by default. `remove` also deletes the keychain item.
+- If the keychain is locked (SSH session, headless box), commands for that profile fail with a clear error instead of running without a token.
+- What this protects: the token in backups, synced `~/.config`, disk images and accidental `cat`s. What it doesn't: anything already running as your user can still call `security` or `wrangler-accounts exec`.
+- OAuth profiles are not covered yet: wrangler reads `config.toml` from disk, so a plaintext copy has to exist in the shadow HOME while a command runs. See [#3](https://github.com/leeguooooo/wrangler-accounts/issues/3).
+
 ## When to use `wrangler-accounts` vs. native env vars
 
 - **Local dev, multiple OAuth accounts** → `wrangler-accounts login <name>` (the classic use case)
@@ -262,6 +283,8 @@ CLOUDFLARE_API_TOKEN=xxx CLOUDFLARE_ACCOUNT_ID=yyy wrangler-accounts deploy
 - `WRANGLER_PROFILE` — profile to use when no `--profile` flag is given
 - `WRANGLER_CONFIG_PATH` — Wrangler config path override
 - `WRANGLER_ACCOUNTS_DIR` — profiles directory override
+- `WRANGLER_ACCOUNTS_PROTECT_TOKENS=1` — `token-add` stores the token in the OS keychain by default (same as `--protect`)
+- `WRANGLER_ACCOUNTS_SECRET_BACKEND` — force `keychain` or `secret-service` (auto-detected by default)
 - `WRANGLER_ACCOUNTS_SHIM_DIR` — where `shim install` writes the `wrangler` shim (default `~/.wrangler-accounts/shims`)
 - `WA_PASSTHROUGH=1` — bypass the global `wrangler` shim for one command (`NOWRANGLER_ACCOUNTS_GUARD=1` also works)
 - `XDG_CONFIG_HOME` — fallback base for the profiles directory

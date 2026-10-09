@@ -14,6 +14,9 @@ _wrangler_accounts() {
     'exec:Run a command in an isolated shadow HOME for a profile'
     'gc:Remove stale shadow HOMEs from tmpdir'
     'remove:Remove a profile'
+    'token-add:Save an API token profile'
+    'protect:Move token profile secrets into the OS keychain'
+    'unprotect:Move token profile secrets back into token.json'
     'use:(deprecated) Globally switch to a profile'
     'sync-active:(deprecated) Alias for sync-default'
   )
@@ -35,6 +38,8 @@ _wrangler_accounts() {
     '(--force -f)'{--force,-f}'[Overwrite existing profile on save]' \
     '--no-backup[Disable backup on use]' \
     '--unset[Unset the persistent default profile]' \
+    '--protect[Store the token in the OS keychain]' \
+    '--all[All token profiles]' \
     '--older-than[Age threshold for gc]:duration:' \
     '1:command:->command' \
     '*::arg:->args'
@@ -50,7 +55,7 @@ _wrangler_accounts() {
       ;;
     args)
       case $words[1] in
-        save|sync|login|remove|default|whoami|exec|use)
+        save|sync|login|remove|default|whoami|exec|use|protect|unprotect)
           _get_profiles
           ;;
       esac

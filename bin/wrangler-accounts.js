@@ -35,9 +35,13 @@ const {
   saveProfile: saveProfileImpl,
   saveTokenProfile: saveTokenProfileImpl,
   readTokenCredentials,
+  resolveTokenCredentials,
+  protectTokenProfile,
+  unprotectTokenProfile,
   setProfileNote: setProfileNoteImpl,
   removeProfile: removeProfileImpl,
 } = require("../lib/profile-store");
+const { backendName } = require("../lib/secret-store");
 const {
   parseWranglerWhoamiOutput,
   getWranglerAuthPath,
@@ -78,6 +82,8 @@ const MANAGEMENT_SUBCOMMANDS = new Set([
   "remove",
   "default",
   "token-add",
+  "protect",
+  "unprotect",
   "note",
   "whoami",
   "gc",
@@ -272,7 +278,17 @@ function runResolvedProfileCommand({
   const profileType = getProfileType(profileDir);
 
   if (profileType === "token") {
-    const creds = readTokenCredentials(profileDir);
+    let creds;
+    try {
+      creds = resolveTokenCredentials(profileDir);
+    } catch (err) {
+      const stored = readTokenCredentials(profileDir) || {};
+      die(
+        `Token profile '${resolved.name}' is protected in the ${stored.credentialStore || "OS"} store, but its token could not be read: ${err.message}\n` +
+          `Usually the keychain is locked or there is no desktop session (SSH, headless). Unlock it and retry.\n` +
+          `If the item was deleted, re-add the profile: wrangler-accounts token-add ${resolved.name} <api-token> <account-id> --force [--protect]`,
+      );
+    }
     if (!creds || !creds.apiToken) {
       die(`Token profile '${resolved.name}' is missing token.json credentials.`);
     }
@@ -334,7 +350,9 @@ Commands:
   status
   login <name>
   save <name>
-  token-add <name> <api-token> <account-id>
+  token-add <name> <api-token> <account-id> [--protect]
+  protect <name> | --all  Move token profile secrets into the OS keychain
+  unprotect <name> | --all
   sync <name>
   sync-active
   sync-default
@@ -354,6 +372,8 @@ Options:
   --plain                 Plain output for list (one name per line)
   --include-backups       Include backup profiles in list/status
   -f, --force             Overwrite existing profile on save
+  --protect               token-add: store the token in the OS keychain, not token.json
+  --all                   protect/unprotect: every token profile
   -h, --help              Show help
   -v, --version           Print version
 
@@ -361,6 +381,7 @@ Env:
   WRANGLER_CONFIG_PATH
   WRANGLER_ACCOUNTS_DIR
   WRANGLER_ACCOUNTS_SHIM_DIR
+  WRANGLER_ACCOUNTS_PROTECT_TOKENS=1   token-add defaults to --protect
   XDG_CONFIG_HOME
 
 Examples:
@@ -427,6 +448,10 @@ function parseArgs(argv) {
       opts.includeBackups = true;
     } else if (arg === "--force" || arg === "-f") {
       opts.force = true;
+    } else if (arg === "--protect" || arg === "--keychain") {
+      opts.protect = true;
+    } else if (arg === "--all") {
+      opts.all = true;
     } else if (arg === "--unset") {
       opts.unset = true;
     } else if (arg === "--apply") {
@@ -607,9 +632,11 @@ function main() {
         type === "token" ? readTokenSessionState() : readSessionState(cfgPath);
       const meta = readMeta(profileDir);
       const identity = getMetaIdentity(meta);
+      const tokenCreds = type === "token" ? readTokenCredentials(profileDir) : null;
       return {
         name,
         type,
+        credentialStore: type === "token" ? (tokenCreds && tokenCreds.credentialStore) || "file" : "file",
         isDefault: name === defaultName,
         isActive: name === activeName,
         status: session.effective, // 'valid' | 'refreshable' | 'expired' | 'unknown' | 'token'
@@ -691,7 +718,7 @@ function main() {
         e.status === "expired" ? "EXPIRED"
         : e.status === "refreshable" ? "valid*"
         : e.status === "valid" ? "valid"
-        : e.status === "token" ? "token"
+        : e.status === "token" ? (e.credentialStore && e.credentialStore !== "file" ? `token (${e.credentialStore})` : "token")
         : "unknown",
       expires: e.type === "token" ? "—" : formatExpiry(e.expirationTime),
       verified:
@@ -871,9 +898,45 @@ function main() {
     if (!apiToken) die("Missing API token for token-add");
     if (!accountId) die("Missing account ID for token-add");
     ensureDir(profilesDir);
-    saveTokenProfile(name, apiToken, accountId, profilesDir, opts.force);
-    console.log(`Saved token profile '${name}'`);
+    const protect = Boolean(opts.protect) || process.env.WRANGLER_ACCOUNTS_PROTECT_TOKENS === "1";
+    saveTokenProfile(name, apiToken, accountId, profilesDir, opts.force, { protect });
+    const where = protect ? ` (token in ${backendName()})` : "";
+    if (opts.json) {
+      console.log(JSON.stringify({ command: "token-add", name, protected: protect, credentialStore: protect ? backendName() : null }, null, 2));
+    } else {
+      console.log(`Saved token profile '${name}'${where}`);
+    }
     return;
+  }
+
+  if (command === "protect" || command === "unprotect") {
+    const name = rest[1];
+    if (!name && !opts.all) die(`Usage: wrangler-accounts ${command} <name> | --all`);
+    const names = opts.all
+      ? listProfiles(profilesDir).filter((n) => getProfileType(path.join(profilesDir, n)) === "token")
+      : [name];
+    const fn = command === "protect" ? protectTokenProfile : unprotectTokenProfile;
+    const results = [];
+    let failed = false;
+    for (const n of names) {
+      try {
+        results.push(fn(profilesDir, n));
+      } catch (err) {
+        failed = true;
+        results.push({ name: n, status: "error", error: err.message });
+      }
+    }
+    if (opts.json) {
+      console.log(JSON.stringify({ command, results }, null, 2));
+    } else if (!results.length) {
+      console.log("No token profiles found.");
+    } else {
+      for (const r of results) {
+        const detail = r.error || r.reason || (r.store ? `(${r.store})` : "");
+        console.log(`${r.name}: ${r.status}${detail ? ` ${detail}` : ""}`);
+      }
+    }
+    process.exit(failed ? 1 : 0);
   }
 
   if (command === "note") {

@@ -67,6 +67,7 @@ If `wrangler-accounts --version` is below any of these, **upgrade first** before
 | **≥ 1.3.0** | STATUS column distinguishes `valid` / `valid*` / `EXPIRED` (refresh-token-aware) | `list` shows `EXPIRED` for healthy profiles, scaring you into running `login` for no reason |
 | **≥ 1.4.0** | `login` refuses non-TTY contexts and accidental overwrites | `login <name>` hangs forever in non-interactive contexts; reflexive `login` overwrites a healthy profile |
 | **≥ 1.6.0** | API token profiles (`token-add`) + anonymous env-var pass-through | only OAuth profiles existed; `CLOUDFLARE_API_TOKEN` in env still required a named profile to be selected |
+| **≥ 1.8.0** | token profiles can keep the API token in the OS keychain (`protect`, `token-add --protect`) | `protect` is an unknown command; tokens only live in `token.json` |
 
 ```bash
 npm i -g github:leeguooooo/wrangler-accounts    # reinstall from main = latest
@@ -181,7 +182,7 @@ The only time a user actually needs `wrangler-accounts login <name>` again is:
 
 ### Save an API token profile (no browser required)
 
-`wrangler-accounts token-add <name> <api-token> <account-id> [--force]`
+`wrangler-accounts token-add <name> <api-token> <account-id> [--force] [--protect]`
 
 Saves a Cloudflare API token + account ID as a named profile. No OAuth browser flow needed. The credentials are stored in `token.json` (mode 0600) inside the profile directory.
 
@@ -195,6 +196,8 @@ wrangler-accounts work r2 list
 ```
 
 Token profiles appear in `list` with a `[token]` type indicator and `STATUS: token` — there is no expiration concept, so they are always ready to use. `remove` works the same as for OAuth profiles.
+
+**Keychain storage (1.8.0+):** `token-add ... --protect`, or `protect <name>` / `protect --all` for existing profiles, moves the API token into the macOS Keychain / Linux Secret Service; `token.json` then holds only the account ID and `list` shows `token (keychain)`. `unprotect <name>` reverses it. Migration only removes the plaintext after the stored copy reads back identical. If a protected profile fails with "could not be read", the keychain is locked (often SSH/headless) — tell the user to unlock it; do not try to work around it. OAuth profiles cannot be protected yet.
 
 **Env-var pass-through (1.6.0+):** when `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are already set in the environment and no profile is specified, `wrangler-accounts` runs in anonymous-token mode (no named profile needed). Useful for CI jobs that inject credentials via secrets:
 
@@ -537,7 +540,7 @@ Use `--json` when another tool needs to parse results. All v1.0 commands that pr
 
 ## Naming rules
 
-Profile names: letters, numbers, dot, underscore, dash only. Names matching management subcommand names (`exec`, `default`, `whoami`, `gc`, `login`, `token-add`, `list`, `status`, `save`, `sync`, `sync-default`, `remove`, `use`, `sync-active`) cannot be reached via positional shorthand — use `--profile <name>` for those.
+Profile names: letters, numbers, dot, underscore, dash only. Names matching management subcommand names (`exec`, `default`, `whoami`, `gc`, `login`, `token-add`, `protect`, `unprotect`, `list`, `status`, `save`, `sync`, `sync-default`, `remove`, `use`, `sync-active`) cannot be reached via positional shorthand — use `--profile <name>` for those.
 
 ## Deprecated
 
