@@ -422,6 +422,27 @@ test('a native profile with wrangler downgraded fails fast with upgrade / unmigr
   assert.match(r.stderr, /unmigrate work/);
 });
 
+test('a failed wrangler token check reports a clean reason: no colour codes, no deleted log path', () => {
+  let env = null;
+  const res = native.wranglerTokenCheck('work', {
+    env: { HOME: '/nowhere' },
+    spawn: (cmd, args, opts) => {
+      env = opts.env;
+      return {
+        status: 1,
+        stdout: '',
+        stderr:
+          '\n\x1b[31m✘ \x1b[41;31m[\x1b[41;97mERROR\x1b[41;31m]\x1b[0m \x1b[1mNot logged in.\x1b[0m\n\n' +
+          `🪵  Logs were written to "${opts.env.WRANGLER_LOG_PATH}"\n`,
+      };
+    },
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'wrangler auth token exited 1: Not logged in.');
+  assert.equal(env.FORCE_COLOR, '0');
+  assert.equal(env.NO_COLOR, '1');
+});
+
 test('the wrangler token check never lets wrangler write the token into ~/.wrangler/logs', () => {
   let seen = null;
   const res = native.wranglerTokenCheck('work', {
