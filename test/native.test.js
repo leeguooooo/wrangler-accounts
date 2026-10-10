@@ -413,13 +413,14 @@ test('shadow backend forces CLOUDFLARE_AUTH_USE_KEYRING=false even with keyring 
   assert.ok(!fs.existsSync(t.store));
 });
 
-test('a native profile with wrangler downgraded fails fast with upgrade / unmigrate hints', () => {
+test('a native profile with wrangler downgraded still runs: no --profile, default.toml in a shadow', () => {
   const t = setup();
-  t.addOAuth('work');
+  t.addOAuth('work', 'tok-w');
   t.json(t.run(['migrate', 'work', '--json']));
-  const r = t.run(['--profile', 'work', 'deploy'], { PATH: `${OLD_BIN}${path.delimiter}${process.env.PATH}` });
-  assert.equal(r.status, 2);
-  assert.match(r.stderr, /unmigrate work/);
+  const out = t.json(t.run(['--profile', 'work', 'deploy'], { PATH: `${OLD_BIN}${path.delimiter}${process.env.PATH}`, WA_CONTRACT_REAL_HOME: t.home }));
+  assert.deepEqual(out.argv, ['deploy']);
+  assert.equal(out.homeIsReal, false);
+  assert.equal(out.shadowDefaultToml, TOML('tok-w'));
 });
 
 test('a failed wrangler token check reports a clean reason: no colour codes, no deleted log path', () => {

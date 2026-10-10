@@ -328,19 +328,7 @@ function nativeSessionState(ctx) {
   };
 }
 
-function ensureNativeUsable(name, ctx, profilesDir) {
-  const probe = nativeProbe(profilesDir);
-  if (!probe.supported) {
-    die(
-      [
-        `Profile '${name}' lives in wrangler's native profile store ('${ctx.nativeName}'), but the wrangler on PATH cannot use it: ${probe.reason}.`,
-        `profile '${name}' 已迁移到 wrangler 原生 profile，但当前 wrangler 不支持。`,
-        UNSUPPORTED_HINT,
-        `Or move it back: wrangler-accounts unmigrate ${name}`,
-      ].join("\n"),
-      2,
-    );
-  }
+function ensureNativeUsable(name, ctx) {
   if (ctx.state === "missing") {
     die(
       [
@@ -514,7 +502,7 @@ function nativeLoginGuidance(name, first) {
 
 function runNativeProfileCommand({ resolved, profilesDir, command, args, captureStdout }) {
   const ctx = nativeContext(profilesDir, resolved.name);
-  ensureNativeUsable(resolved.name, ctx, profilesDir);
+  ensureNativeUsable(resolved.name, ctx);
   if (ctx.state === "plaintext") {
     const session = readSessionState(ctx.files.toml);
     if (session.effective === "expired") {
@@ -554,7 +542,9 @@ function runNativeProfileCommand({ resolved, profilesDir, command, args, capture
   const first = native.firstPositional(args);
   if (first === "login" || first === "logout") die(nativeLoginGuidance(resolved.name, first), 2);
   // `wrangler whoami` rejects --profile; resolve it through the bound shadow.
-  if (first === "whoami") return boundShadow("wrangler", args);
+  // A wrangler on PATH older than 4.149 has no --profile at all: it reads the
+  // bound shadow's default.toml instead.
+  if (first === "whoami" || !nativeProbe(profilesDir).supported) return boundShadow("wrangler", args);
   let wranglerArgs = native.withProfileFlag(args, ctx.nativeName);
   if (first === "auth") {
     const rest = args.slice(args.indexOf("auth") + 1);
@@ -1128,15 +1118,10 @@ function main() {
       }
       const cloudflaredPath = findCloudflared();
       for (const e of entries) {
-        if (e.backend === "native") {
-          const probe = nativeProbe(profilesDir);
-          if (!probe.supported || e.status === "missing") {
-            e.verified = false;
-            e.verifyError = !probe.supported
-              ? `wrangler cannot use native profiles: ${probe.reason}`
-              : "native credentials missing (re-login with --force)";
-            continue;
-          }
+        if (e.backend === "native" && e.status === "missing") {
+          e.verified = false;
+          e.verifyError = "native credentials missing (re-login with --force)";
+          continue;
         }
         try {
           const resolved = { name: e.name, source: "deep" };
